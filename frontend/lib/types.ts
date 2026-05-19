@@ -67,6 +67,17 @@ export interface OrderItem {
   subtotal: number;
 }
 
+export interface OrderTrackingEvent {
+  /** id is null for synthesized fallback rows for legacy orders. */
+  id: number | null;
+  status: OrderStatus | null;
+  label: string;
+  note: string | null;
+  location: string | null;
+  source: 'admin' | 'system' | 'webhook' | 'customer';
+  created_at: string;
+}
+
 export interface Order {
   id: number;
   order_number: string;
@@ -87,4 +98,7 @@ export interface Order {
   paid_at?: string | null;
   created_at: string;
   items?: OrderItem[];
+  tracking_events?: OrderTrackingEvent[];
+  /** Always-present timeline (server-side synthesizes when no rows exist). */
+  timeline?: OrderTrackingEvent[];
 }

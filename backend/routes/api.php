@@ -76,6 +76,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/orders',                [OrderAdminController::class, 'index']);
         Route::get('/orders/{order}',        [OrderAdminController::class, 'show']);
         Route::patch('/orders/{order}/status', [OrderAdminController::class, 'updateStatus']);
+        Route::post('/orders/{order}/tracking', [OrderAdminController::class, 'addTrackingEvent']);
 
         Route::get('/users',                 [UserAdminController::class, 'index']);
         Route::get('/users/{user}',          [UserAdminController::class, 'show']);

@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { api, apiError, formatRupiah } from '@/lib/api';
 import type { Order } from '@/lib/types';
+import { OrderTimeline } from '@/components/OrderTimeline';
 
 const STATUS_LABEL: Record<string, string> = {
   pending: 'Menunggu Pembayaran', paid: 'Dibayar', packed: 'Dikemas',
@@ -15,9 +16,12 @@ export default function OrderDetailPage() {
   const { orderNumber } = useParams<{ orderNumber: string }>();
   const [order, setOrder] = useState<Order | null>(null);
 
-  useEffect(() => {
-    api.get(`/orders/${orderNumber}`).then((r) => setOrder(r.data.data));
-  }, [orderNumber]);
+  async function load() {
+    const r = await api.get(`/orders/${orderNumber}`);
+    setOrder(r.data.data);
+  }
+
+  useEffect(() => { load(); }, [orderNumber]);
 
   async function cancel() {
     if (!confirm('Batalkan pesanan ini?')) return;
@@ -44,8 +48,19 @@ export default function OrderDetailPage() {
           </div>
         </div>
         {order.tracking_number && (
-          <div className="mt-3 text-sm">Resi: <span className="font-mono">{order.tracking_number}</span> ({order.courier?.toUpperCase()} {order.courier_service})</div>
+          <div className="mt-3 text-sm">
+            Resi: <span className="font-mono">{order.tracking_number}</span>{' '}
+            ({order.courier?.toUpperCase()} {order.courier_service})
+          </div>
         )}
+      </div>
+
+      <div className="card p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold">Lacak Pesanan</h2>
+          <button onClick={load} className="text-xs text-brand hover:underline">Refresh</button>
+        </div>
+        <OrderTimeline events={order.timeline ?? order.tracking_events} />
       </div>
 
       <div className="card p-4">
