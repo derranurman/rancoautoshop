@@ -17,6 +17,22 @@ export interface Category {
   description?: string | null;
 }
 
+export interface Address {
+  id: number;
+  user_id: number;
+  label: string | null;
+  recipient_name: string;
+  phone: string;
+  province: string;
+  city: string;
+  city_id: string | null;
+  postal_code: string | null;
+  address_line: string;
+  is_default: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface Product {
   id: number;
   slug: string;

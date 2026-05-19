@@ -99,6 +99,37 @@ class AuthController extends Controller
         return response()->json(['user' => $request->user()]);
     }
 
+    /**
+     * Update the authenticated user's profile.
+     *
+     * Fields are individually optional so the same endpoint can be used to
+     * "add a phone number for the first time" when the user registered via
+     * email/Google, or to rename, etc. Uniqueness is enforced ignoring the
+     * current user's row.
+     */
+    public function updateProfile(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $data = $request->validate([
+            'name'  => ['sometimes', 'string', 'max:120'],
+            'email' => ['sometimes', 'nullable', 'email', Rule::unique('users', 'email')->ignore($user->id)],
+            'phone' => ['sometimes', 'nullable', 'string', 'regex:/^\+?\d{8,15}$/', Rule::unique('users', 'phone')->ignore($user->id)],
+        ]);
+
+        if (array_key_exists('phone', $data) && $data['phone']) {
+            $data['phone'] = $this->normalizePhone($data['phone']);
+            // Re-check uniqueness after normalization (e.g. "08..." vs "+628...").
+            $clash = User::where('phone', $data['phone'])->where('id', '!=', $user->id)->exists();
+            if ($clash) {
+                throw ValidationException::withMessages(['phone' => 'Nomor HP sudah digunakan.']);
+            }
+        }
+
+        $user->fill($data)->save();
+
+        return response()->json(['user' => $user->fresh()]);
+    }
+
     // -------------------- Phone OTP: request --------------------
     public function requestOtp(Request $request, TwilioOtpService $otp): JsonResponse
     {

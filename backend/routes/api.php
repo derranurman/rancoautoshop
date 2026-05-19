@@ -43,6 +43,7 @@ Route::post('/payments/midtrans/notification', [PaymentController::class, 'midtr
 // ----------------- Authenticated (both roles) -----------------
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/auth/me',    [AuthController::class, 'me']);
+    Route::patch('/auth/profile', [AuthController::class, 'updateProfile']);
     Route::post('/auth/logout',[AuthController::class, 'logout']);
 
     // Customer-only

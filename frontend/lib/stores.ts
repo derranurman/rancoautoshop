@@ -10,9 +10,11 @@ interface AuthState {
   loadMe: () => Promise<void>;
   login: (token: string, user: User) => void;
   logout: () => Promise<void>;
+  /** Replace the current user (used after profile update). */
+  setUser: (user: User) => void;
 }
 
-export const useAuth = create<AuthState>((set, get) => ({
+export const useAuth = create<AuthState>((set) => ({
   user: null,
   loading: true,
   async loadMe() {
@@ -33,6 +35,9 @@ export const useAuth = create<AuthState>((set, get) => ({
     try { await api.post('/auth/logout'); } catch {}
     setToken('customer', null);
     set({ user: null });
+  },
+  setUser(user) {
+    set({ user });
   },
 }));
 
