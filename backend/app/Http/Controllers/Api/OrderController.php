@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Cart;
 use App\Models\Order;
 use App\Models\OrderItem;
+use App\Models\OrderTrackingEvent;
 use App\Models\Product;
 use App\Models\Voucher;
 use App\Services\MidtransService;
@@ -30,7 +31,7 @@ class OrderController extends Controller
     {
         $order = Order::where('order_number', $orderNumber)
             ->where('user_id', $request->user()->id)
-            ->with('items')
+            ->with(['items', 'trackingEvents'])
             ->firstOrFail();
         return response()->json(['data' => $order]);
     }
@@ -131,8 +132,15 @@ class OrderController extends Controller
                 'midtrans_order_id'   => $order->order_number,
             ]);
 
+            // Initial tracking event
+            $order->addTrackingEvent(
+                Order::STATUS_PENDING,
+                'Pesanan dibuat. Menunggu pembayaran melalui Midtrans.',
+                OrderTrackingEvent::SOURCE_SYSTEM,
+            );
+
             return response()->json([
-                'order'        => $order->fresh('items'),
+                'order'        => $order->fresh(['items', 'trackingEvents']),
                 'snap_token'   => $snap['token'] ?? null,
                 'redirect_url' => $snap['redirect_url'] ?? null,
                 'mock'         => $snap['mock'] ?? false,
@@ -156,8 +164,13 @@ class OrderController extends Controller
                 }
             }
             $order->update(['status' => Order::STATUS_CANCELLED]);
+            $order->addTrackingEvent(
+                Order::STATUS_CANCELLED,
+                'Pesanan dibatalkan oleh pelanggan.',
+                OrderTrackingEvent::SOURCE_CUSTOMER,
+            );
         });
 
-        return response()->json(['data' => $order->fresh('items')]);
+        return response()->json(['data' => $order->fresh(['items', 'trackingEvents'])]);
     }
 }

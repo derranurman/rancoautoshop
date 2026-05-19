@@ -1,7 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
-import { api, getToken, setToken } from './api';
+import { api, getToken, setToken, RequestWithKind } from './api';
 import type { Cart, User } from './types';
 
 interface AuthState {
@@ -50,18 +50,15 @@ export const useAdminAuth = create<AdminAuthState>((set) => ({
   async loadMe() {
     if (!getToken('admin')) { set({ loading: false }); return; }
     try {
-      const res = await api.get('/admin/dashboard');
-      // If this works, we know we have a valid admin token; fetch me separately
-      const me = await api.get('/auth/me').catch(() => null);
+      // Force the admin token on this shared endpoint regardless of page context.
+      const me = await api.get('/auth/me', { tokenKind: 'admin' } as RequestWithKind);
       const admin = (me?.data?.user ?? null) as User | null;
-      if (admin?.role !== 'admin') {
+      if (!admin || admin.role !== 'admin' || admin.is_active === false) {
         setToken('admin', null);
         set({ admin: null, loading: false });
         return;
       }
       set({ admin, loading: false });
-      // Reference to avoid unused warning
-      void res;
     } catch {
       setToken('admin', null);
       set({ admin: null, loading: false });
@@ -72,7 +69,7 @@ export const useAdminAuth = create<AdminAuthState>((set) => ({
     set({ admin });
   },
   async logout() {
-    try { await api.post('/auth/logout'); } catch {}
+    try { await api.post('/auth/logout', null, { tokenKind: 'admin' } as RequestWithKind); } catch {}
     setToken('admin', null);
     set({ admin: null });
   },

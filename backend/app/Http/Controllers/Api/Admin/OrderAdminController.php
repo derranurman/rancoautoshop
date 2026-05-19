@@ -4,8 +4,10 @@ namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Order;
+use App\Models\OrderTrackingEvent;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 class OrderAdminController extends Controller
@@ -27,7 +29,9 @@ class OrderAdminController extends Controller
 
     public function show(Order $order): JsonResponse
     {
-        return response()->json(['data' => $order->load(['user', 'items.product'])]);
+        return response()->json([
+            'data' => $order->load(['user', 'items.product', 'trackingEvents']),
+        ]);
     }
 
     public function updateStatus(Request $request, Order $order): JsonResponse
@@ -38,16 +42,68 @@ class OrderAdminController extends Controller
                 Order::STATUS_DELIVERED, Order::STATUS_CANCELLED,
             ])],
             'tracking_number' => ['nullable', 'string', 'max:60'],
+            'note'            => ['nullable', 'string', 'max:500'],
+            'location'        => ['nullable', 'string', 'max:120'],
         ]);
 
-        $patch = ['status' => $data['status']];
-        if (isset($data['tracking_number'])) {
-            $patch['tracking_number'] = $data['tracking_number'];
-        }
-        if ($data['status'] === Order::STATUS_PAID && ! $order->paid_at) {
-            $patch['paid_at'] = now();
-        }
-        $order->update($patch);
-        return response()->json(['data' => $order->fresh('items')]);
+        DB::transaction(function () use ($order, $data) {
+            $patch = ['status' => $data['status']];
+            if (array_key_exists('tracking_number', $data) && $data['tracking_number'] !== null) {
+                $patch['tracking_number'] = $data['tracking_number'];
+            }
+            if ($data['status'] === Order::STATUS_PAID && ! $order->paid_at) {
+                $patch['paid_at'] = now();
+            }
+            $order->update($patch);
+
+            // Build a friendly default note based on the new status.
+            $note = $data['note'] ?? null;
+            if (! $note) {
+                $note = match ($data['status']) {
+                    Order::STATUS_PAID      => 'Pembayaran dikonfirmasi oleh admin.',
+                    Order::STATUS_PACKED    => 'Pesanan sedang dikemas di gudang.',
+                    Order::STATUS_SHIPPED   => $order->tracking_number
+                        ? "Pesanan diserahkan ke kurir ".strtoupper((string) $order->courier).". Resi: {$order->tracking_number}"
+                        : 'Pesanan diserahkan ke kurir.',
+                    Order::STATUS_DELIVERED => 'Pesanan telah diterima oleh pelanggan.',
+                    Order::STATUS_CANCELLED => 'Pesanan dibatalkan oleh admin.',
+                    default                 => null,
+                };
+            }
+
+            $order->addTrackingEvent(
+                $data['status'],
+                $note,
+                OrderTrackingEvent::SOURCE_ADMIN,
+                $data['location'] ?? null,
+            );
+        });
+
+        return response()->json([
+            'data' => $order->fresh(['items', 'trackingEvents']),
+        ]);
+    }
+
+    /**
+     * Append an informational tracking event without changing the order status.
+     * E.g. "Paket transit di Cikarang", "Kurir mencoba pengiriman, alamat kosong".
+     */
+    public function addTrackingEvent(Request $request, Order $order): JsonResponse
+    {
+        $data = $request->validate([
+            'note'     => ['required', 'string', 'max:500'],
+            'location' => ['nullable', 'string', 'max:120'],
+        ]);
+
+        $order->addTrackingEvent(
+            null,
+            $data['note'],
+            OrderTrackingEvent::SOURCE_ADMIN,
+            $data['location'] ?? null,
+        );
+
+        return response()->json([
+            'data' => $order->fresh(['items', 'trackingEvents']),
+        ]);
     }
 }

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Order;
+use App\Models\OrderTrackingEvent;
 use App\Services\MidtransService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -40,10 +41,25 @@ class PaymentController extends Controller
                     'status'  => Order::STATUS_PAID,
                     'paid_at' => now(),
                 ]);
+                $order->addTrackingEvent(
+                    Order::STATUS_PAID,
+                    'Pembayaran diterima via Midtrans.',
+                    OrderTrackingEvent::SOURCE_WEBHOOK,
+                );
             }
         } elseif (in_array($status, ['cancel', 'expire', 'deny'])) {
             if ($order->status === Order::STATUS_PENDING) {
                 $order->update(['status' => Order::STATUS_CANCELLED]);
+                $reason = match ($status) {
+                    'expire' => 'Pembayaran kedaluwarsa.',
+                    'deny'   => 'Pembayaran ditolak oleh penyedia pembayaran.',
+                    default  => 'Transaksi dibatalkan di sisi pembayaran.',
+                };
+                $order->addTrackingEvent(
+                    Order::STATUS_CANCELLED,
+                    $reason,
+                    OrderTrackingEvent::SOURCE_WEBHOOK,
+                );
             }
         }
 
