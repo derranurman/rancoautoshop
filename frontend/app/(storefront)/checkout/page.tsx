@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import toast from 'react-hot-toast';
 import { api, apiError, formatRupiah } from '@/lib/api';
 import { useAuth, useCart } from '@/lib/stores';
+import type { Address } from '@/lib/types';
 
 type Province = { province_id: string; province: string };
 type City = { city_id: string; province_id: string; type: string; city_name: string; postal_code: string };
@@ -20,6 +22,7 @@ export default function CheckoutPage() {
   const [cities, setCities] = useState<City[]>([]);
   const [provinceId, setProvinceId] = useState('');
   const [cityId, setCityId] = useState('');
+  const [postalCode, setPostalCode] = useState('');
   const [courier, setCourier] = useState('jne');
   const [costs, setCosts] = useState<Cost[]>([]);
   const [chosenCost, setChosenCost] = useState<Cost | null>(null);
@@ -27,29 +30,125 @@ export default function CheckoutPage() {
   const [discount, setDiscount] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
+  // Saved addresses
+  const [addresses, setAddresses] = useState<Address[]>([]);
+  const [selectedAddrId, setSelectedAddrId] = useState<number | 'new'>('new');
+
   useEffect(() => {
     if (!authLoading && !user) { router.replace('/login'); return; }
-    if (user) fetchCart();
+    if (user) {
+      fetchCart();
+      api.get('/addresses')
+        .then((r) => setAddresses(r.data.data ?? []))
+        .catch(() => setAddresses([]));
+    }
     api.get('/shipping/provinces').then((r) => setProvinces(r.data.data));
   }, [user, authLoading, fetchCart, router]);
 
   useEffect(() => {
-    if (user) setRecipient((r) => ({ ...r, name: r.name || user.name, phone: r.phone || (user.phone ?? '') }));
+    if (user) {
+      setRecipient((r) => ({
+        ...r,
+        name: r.name || user.name,
+        phone: r.phone || (user.phone ?? ''),
+      }));
+    }
   }, [user]);
 
+  // Load cities whenever province changes (and reset downstream selections).
   useEffect(() => {
     if (provinceId) {
       api.get('/shipping/cities', { params: { province_id: provinceId } })
         .then((r) => setCities(r.data.data));
-    } else { setCities([]); }
-    setCityId(''); setCosts([]); setChosenCost(null);
+    } else {
+      setCities([]);
+    }
+    setCityId('');
+    setCosts([]);
+    setChosenCost(null);
   }, [provinceId]);
+
+  // Auto-pick the default address (or first one) the first time we get the list.
+  useEffect(() => {
+    if (selectedAddrId !== 'new') return;
+    if (addresses.length === 0) return;
+    const def = addresses.find((a) => a.is_default) ?? addresses[0];
+    applyAddress(def);
+    setSelectedAddrId(def.id);
+  }, [addresses]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function applyAddress(a: Address) {
+    setRecipient({ name: a.recipient_name, phone: a.phone, address: a.address_line });
+    setPostalCode(a.postal_code ?? '');
+    // Match province by name (province_id is RajaOngkir-side, not stored here).
+    const prov = provinces.find(
+      (p) => p.province.toLowerCase() === (a.province ?? '').toLowerCase(),
+    );
+    if (prov) {
+      setProvinceId(prov.province_id);
+      // Cities will load via the effect; we set city_id when they arrive.
+      // Stash desired city via a one-shot effect below.
+      pendingCityIdRef.current = a.city_id ?? null;
+      pendingCityNameRef.current = a.city ?? null;
+    } else {
+      setProvinceId('');
+    }
+  }
+
+  // Refs to bridge the async city load (province change triggers city fetch
+  // asynchronously; we stash the desired city until the list arrives).
+  const pendingCityIdRef = useRef<string | null>(null);
+  const pendingCityNameRef = useRef<string | null>(null);
+
+  // When cities arrive, try to resolve the pending city selection.
+  useEffect(() => {
+    if (!cities.length) return;
+    const wantId = pendingCityIdRef.current;
+    const wantName = pendingCityNameRef.current;
+    if (!wantId && !wantName) return;
+    const match =
+      (wantId && cities.find((c) => c.city_id === wantId)) ||
+      (wantName && cities.find(
+        (c) =>
+          `${c.type} ${c.city_name}`.toLowerCase() === wantName.toLowerCase()
+          || c.city_name.toLowerCase() === wantName.toLowerCase(),
+      )) ||
+      null;
+    if (match) {
+      setCityId(match.city_id);
+      if (!postalCode) setPostalCode(match.postal_code);
+    }
+    pendingCityIdRef.current = null;
+    pendingCityNameRef.current = null;
+  }, [cities]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function onAddressPick(value: string) {
+    if (value === 'new') {
+      setSelectedAddrId('new');
+      setRecipient({
+        name: user?.name ?? '',
+        phone: user?.phone ?? '',
+        address: '',
+      });
+      setProvinceId('');
+      setCityId('');
+      setPostalCode('');
+      return;
+    }
+    const id = Number(value);
+    const addr = addresses.find((a) => a.id === id);
+    if (!addr) return;
+    setSelectedAddrId(id);
+    applyAddress(addr);
+  }
 
   async function calcCost() {
     if (!cityId || !cart) return;
     try {
       const r = await api.post('/shipping/cost', {
-        destination: cityId, weight: Math.max(1, cart.total_weight), courier,
+        destination: cityId,
+        weight: Math.max(1, cart.total_weight),
+        courier,
       });
       setCosts(r.data.data); setChosenCost(null);
     } catch (e) { toast.error(apiError(e)); }
@@ -72,9 +171,14 @@ export default function CheckoutPage() {
 
   async function onSubmit() {
     if (!chosenCost) { toast.error('Pilih layanan pengiriman dulu'); return; }
+    if (!recipient.phone.trim()) {
+      toast.error('No HP penerima wajib diisi');
+      return;
+    }
     const cityObj = cities.find((c) => c.city_id === cityId);
     const provObj = provinces.find((p) => p.province_id === provinceId);
-    const addr = `${recipient.address}\n${cityObj?.type ?? ''} ${cityObj?.city_name ?? ''}, ${provObj?.province ?? ''} ${cityObj?.postal_code ?? ''}`.trim();
+    const pc = postalCode || cityObj?.postal_code || '';
+    const addr = `${recipient.address}\n${cityObj?.type ?? ''} ${cityObj?.city_name ?? ''}, ${provObj?.province ?? ''} ${pc}`.trim();
 
     setSubmitting(true);
     try {
@@ -95,7 +199,6 @@ export default function CheckoutPage() {
         || 'https://app.sandbox.midtrans.com/snap/snap.js';
 
       if (!r.data.mock && token && clientKey) {
-        // Load snap.js dynamically and open popup
         await loadSnapScript(snapUrl, clientKey);
         // @ts-expect-error: global injected by snap.js
         window.snap.pay(token, {
@@ -104,7 +207,6 @@ export default function CheckoutPage() {
           onClose:   () => router.push(`/orders/${orderNumber}`),
         });
       } else {
-        // Dev/mock mode — just go to order detail
         router.push(`/orders/${orderNumber}`);
       }
     } catch (e) {
@@ -118,14 +220,52 @@ export default function CheckoutPage() {
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 grid md:grid-cols-3 gap-4">
       <div className="md:col-span-2 space-y-4">
+        {user && !user.phone && (
+          <div className="card p-3 border-yellow-300 bg-yellow-50 text-sm flex items-center justify-between gap-2">
+            <span className="text-yellow-800">
+              Akunmu belum punya nomor HP. Tambahkan supaya kurir bisa menghubungimu.
+            </span>
+            <Link href="/account/profile" className="btn-outline text-xs whitespace-nowrap">
+              Tambah No HP
+            </Link>
+          </div>
+        )}
+
         <div className="card p-4">
-          <h2 className="font-semibold mb-3">Alamat Pengiriman</h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-semibold">Alamat Pengiriman</h2>
+            <Link href="/account/addresses" className="text-xs text-brand hover:underline">
+              Kelola alamat
+            </Link>
+          </div>
+
+          {addresses.length > 0 && (
+            <div className="mb-3">
+              <label className="label">Pilih dari alamat tersimpan</label>
+              <select
+                className="input"
+                value={String(selectedAddrId)}
+                onChange={(e) => onAddressPick(e.target.value)}
+              >
+                {addresses.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.label ? `[${a.label}] ` : ''}{a.recipient_name} — {a.city}
+                    {a.is_default ? ' (utama)' : ''}
+                  </option>
+                ))}
+                <option value="new">+ Isi alamat baru di formulir</option>
+              </select>
+            </div>
+          )}
+
           <div className="grid sm:grid-cols-2 gap-3">
             <div><label className="label">Nama penerima</label>
-              <input className="input" value={recipient.name} onChange={(e) => setRecipient({ ...recipient, name: e.target.value })} />
+              <input className="input" value={recipient.name}
+                     onChange={(e) => setRecipient({ ...recipient, name: e.target.value })} />
             </div>
             <div><label className="label">No. HP penerima</label>
-              <input className="input" value={recipient.phone} onChange={(e) => setRecipient({ ...recipient, phone: e.target.value })} />
+              <input className="input" value={recipient.phone}
+                     onChange={(e) => setRecipient({ ...recipient, phone: e.target.value })} />
             </div>
             <div><label className="label">Provinsi</label>
               <select className="input" value={provinceId} onChange={(e) => setProvinceId(e.target.value)}>
@@ -139,8 +279,14 @@ export default function CheckoutPage() {
                 {cities.map((c) => <option key={c.city_id} value={c.city_id}>{c.type} {c.city_name}</option>)}
               </select>
             </div>
+            <div><label className="label">Kode Pos</label>
+              <input className="input" value={postalCode}
+                     onChange={(e) => setPostalCode(e.target.value)}
+                     placeholder={cities.find((c) => c.city_id === cityId)?.postal_code ?? ''} />
+            </div>
             <div className="sm:col-span-2"><label className="label">Alamat lengkap</label>
-              <textarea className="input" rows={2} value={recipient.address} onChange={(e) => setRecipient({ ...recipient, address: e.target.value })} />
+              <textarea className="input" rows={2} value={recipient.address}
+                        onChange={(e) => setRecipient({ ...recipient, address: e.target.value })} />
             </div>
           </div>
         </div>
@@ -208,3 +354,4 @@ function loadSnapScript(url: string, clientKey: string): Promise<void> {
     document.head.appendChild(s);
   });
 }
+
