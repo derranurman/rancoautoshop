@@ -51,13 +51,15 @@ export default function ProductDetailPage() {
         </div>
         <p className="text-gray-700 whitespace-pre-line">{product.description}</p>
 
+        {/* Pelanggan hanya melihat harga jual final. Rincian harga produk vs
+            biaya operasional adalah info internal dan disembunyikan dari user. */}
         <div className="card p-3 text-sm text-gray-600">
-          <div className="flex justify-between"><span>Harga produk</span><span>{formatRupiah(product.price)}</span></div>
-          <div className="flex justify-between"><span>Biaya operasional</span><span>{formatRupiah(product.operational_cost)}</span></div>
-          <div className="flex justify-between text-gray-900 font-medium mt-1 pt-1 border-t border-gray-100">
-            <span>Harga jual</span><span>{formatRupiah(product.selling_price)}</span>
+          <div className="flex justify-between text-gray-900 font-medium">
+            <span>Harga</span><span>{formatRupiah(product.selling_price)}</span>
           </div>
-          <div className="text-xs text-gray-500 mt-1">*Ongkir dihitung di halaman checkout sesuai alamat pengiriman.</div>
+          <div className="text-xs text-gray-500 mt-1">
+            *Ongkir dihitung di halaman checkout sesuai alamat pengiriman.
+          </div>
         </div>
 
         <div className="flex items-center gap-3 pt-2">

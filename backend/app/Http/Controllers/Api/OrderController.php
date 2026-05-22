@@ -45,7 +45,7 @@ class OrderController extends Controller
             'recipient_name'   => ['required', 'string', 'max:120'],
             'recipient_phone'  => ['required', 'string', 'max:20'],
             'shipping_address' => ['required', 'string'],
-            'courier'          => ['required', 'string', 'in:jne,pos,tiki'],
+            'courier'          => ['required', 'string', 'in:jne,jnt,pos,tiki'],
             'courier_service'  => ['required', 'string'],
             'shipping_cost'    => ['required', 'integer', 'min:0'],
             'voucher_code'     => ['nullable', 'string', 'max:40'],

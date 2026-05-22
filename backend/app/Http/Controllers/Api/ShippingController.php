@@ -25,7 +25,7 @@ class ShippingController extends Controller
         $data = $request->validate([
             'destination' => ['required', 'string'],
             'weight'      => ['required', 'integer', 'min:1'],
-            'courier'     => ['required', 'string', 'in:jne,pos,tiki'],
+            'courier'     => ['required', 'string', 'in:jne,jnt,pos,tiki'],
         ]);
 
         return response()->json(['data' => $ro->cost($data['destination'], $data['weight'], $data['courier'])]);

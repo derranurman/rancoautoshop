@@ -6,6 +6,8 @@ import toast from 'react-hot-toast';
 import { api, apiError, formatRupiah } from '@/lib/api';
 import type { Order } from '@/lib/types';
 import { OrderTimeline } from '@/components/OrderTimeline';
+import { PackageTracker } from '@/components/PackageTracker';
+import { courierLabel } from '@/lib/couriers';
 
 const NEXT_STATUS: Record<string, string[]> = {
   pending:   ['paid', 'cancelled'],
@@ -88,9 +90,17 @@ export default function AdminOrderDetailPage() {
         <div className="flex justify-between"><span>Penerima</span><span>{order.recipient_name} — {order.recipient_phone}</span></div>
         <div className="whitespace-pre-line text-gray-600">{order.shipping_address}</div>
         {order.tracking_number && (
-          <div className="pt-1">Resi: <span className="font-mono">{order.tracking_number}</span> ({order.courier?.toUpperCase()} {order.courier_service})</div>
+          <div className="pt-1">Resi: <span className="font-mono">{order.tracking_number}</span> ({courierLabel(order.courier)} {order.courier_service})</div>
         )}
       </div>
+
+      {/* Lacak paket — admin pun bisa langsung membuka halaman pelacakan
+          kurir dari sini untuk verifikasi resi yang baru dimasukkan. */}
+      <PackageTracker
+        courier={order.courier}
+        service={order.courier_service}
+        trackingNumber={order.tracking_number}
+      />
 
       <div className="card p-4">
         <div className="flex items-center justify-between mb-3">
@@ -118,7 +128,7 @@ export default function AdminOrderDetailPage() {
       <div className="card p-4 space-y-3">
         <h2 className="font-semibold">Update Status</h2>
         <div>
-          <label className="label">Nomor Resi ({order.courier?.toUpperCase()} {order.courier_service})</label>
+          <label className="label">Nomor Resi ({courierLabel(order.courier)} {order.courier_service})</label>
           <input className="input" placeholder="Masukkan no resi kurir" value={tracking}
                  onChange={(e) => setTracking(e.target.value)} />
         </div>

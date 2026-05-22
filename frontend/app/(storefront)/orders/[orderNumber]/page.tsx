@@ -7,6 +7,7 @@ import { api, apiError, formatRupiah } from '@/lib/api';
 import { paySnap } from '@/lib/midtrans';
 import type { Order } from '@/lib/types';
 import { OrderTimeline } from '@/components/OrderTimeline';
+import { PackageTracker } from '@/components/PackageTracker';
 
 const STATUS_LABEL: Record<string, string> = {
   pending: 'Menunggu Pembayaran', paid: 'Dibayar', packed: 'Dikemas',
@@ -169,6 +170,13 @@ export default function OrderDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Customer can jump to the courier's tracking page once admin sets a resi. */}
+      <PackageTracker
+        courier={order.courier}
+        service={order.courier_service}
+        trackingNumber={order.tracking_number}
+      />
 
       {/* Big call-to-action so customers don't get stuck on "Menunggu Pembayaran".
           Picks BCA/Mandiri/BNI/Permata VA, GoPay/ShopeePay/OVO/DANA, QRIS, etc. */}

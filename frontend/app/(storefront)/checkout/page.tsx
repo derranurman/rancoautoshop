@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { api, apiError, formatRupiah } from '@/lib/api';
 import { useAuth, useCart } from '@/lib/stores';
 import { paySnap } from '@/lib/midtrans';
+import { COURIER_CODES, COURIERS, type CourierCode } from '@/lib/couriers';
 import type { Address } from '@/lib/types';
 
 type Province = { province_id: string; province: string };
@@ -26,7 +27,7 @@ export default function CheckoutPage() {
   const [provinceId, setProvinceId] = useState('');
   const [cityId, setCityId] = useState('');
   const [postalCode, setPostalCode] = useState('');
-  const [courier, setCourier] = useState('jne');
+  const [courier, setCourier] = useState<CourierCode>('jne');
   const [costs, setCosts] = useState<Cost[]>([]);
   const [chosenCost, setChosenCost] = useState<Cost | null>(null);
   const [voucherCode, setVoucherCode] = useState('');
@@ -444,10 +445,16 @@ export default function CheckoutPage() {
 
         <div className="card p-4">
           <h2 className="font-semibold mb-3">Pengiriman</h2>
-          <div className="flex gap-2 mb-3">
-            {(['jne', 'pos', 'tiki'] as const).map((c) => (
-              <button key={c} onClick={() => setCourier(c)}
-                className={`btn ${courier === c ? 'bg-ink text-white' : 'bg-gray-100'}`}>{c.toUpperCase()}</button>
+          <div className="flex gap-2 mb-3 flex-wrap">
+            {COURIER_CODES.map((c) => (
+              <button
+                key={c}
+                onClick={() => setCourier(c)}
+                className={`btn ${courier === c ? 'bg-ink text-white' : 'bg-gray-100'}`}
+                title={COURIERS[c].label}
+              >
+                {COURIERS[c].label}
+              </button>
             ))}
             <button onClick={calcCost} disabled={!cityId} className="btn-primary ml-auto"
                     title={cekOngkirHint ?? undefined}>
