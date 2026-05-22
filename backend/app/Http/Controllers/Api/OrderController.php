@@ -205,4 +205,66 @@ class OrderController extends Controller
             'snap_url'     => config('services.midtrans.snap_url'),
         ]);
     }
+
+    /**
+     * Pull the latest payment status straight from Midtrans (no webhook needed).
+     * This is what we call from the frontend right after Snap returns success,
+     * and also from the order detail page on mount + polling while pending —
+     * so during local development (where Midtrans cannot reach localhost
+     * webhook) the order still flips to PAID immediately after the customer
+     * actually pays.
+     */
+    public function syncStatus(Request $request, string $orderNumber, MidtransService $mt): JsonResponse
+    {
+        $order = Order::where('order_number', $orderNumber)
+            ->where('user_id', $request->user()->id)
+            ->with(['items', 'trackingEvents'])
+            ->firstOrFail();
+
+        // Only sync while still pending; once final, just return the order.
+        if ($order->status !== Order::STATUS_PENDING) {
+            return response()->json([
+                'data'            => $order,
+                'midtrans_status' => null,
+                'changed'         => false,
+            ]);
+        }
+
+        $resp = $mt->fetchStatus($order->midtrans_order_id ?: $order->order_number);
+        $status = $resp['transaction_status'] ?? null;
+        $fraud  = $resp['fraud_status'] ?? null;
+        $changed = false;
+
+        if (in_array($status, ['capture', 'settlement'], true) && $fraud !== 'deny') {
+            $order->update([
+                'status'  => Order::STATUS_PAID,
+                'paid_at' => now(),
+            ]);
+            $order->addTrackingEvent(
+                Order::STATUS_PAID,
+                'Pembayaran dikonfirmasi via Midtrans (' . ($resp['payment_type'] ?? 'unknown') . ').',
+                OrderTrackingEvent::SOURCE_WEBHOOK,
+            );
+            $changed = true;
+        } elseif (in_array($status, ['cancel', 'expire', 'deny'], true)) {
+            $order->update(['status' => Order::STATUS_CANCELLED]);
+            $reason = match ($status) {
+                'expire' => 'Pembayaran kedaluwarsa.',
+                'deny'   => 'Pembayaran ditolak oleh penyedia pembayaran.',
+                default  => 'Transaksi dibatalkan di sisi pembayaran.',
+            };
+            $order->addTrackingEvent(
+                Order::STATUS_CANCELLED,
+                $reason,
+                OrderTrackingEvent::SOURCE_WEBHOOK,
+            );
+            $changed = true;
+        }
+
+        return response()->json([
+            'data'            => $order->fresh(['items', 'trackingEvents']),
+            'midtrans_status' => $status,
+            'changed'         => $changed,
+        ]);
+    }
 }

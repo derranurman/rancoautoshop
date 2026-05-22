@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { api, apiError, formatRupiah } from '@/lib/api';
@@ -21,9 +21,71 @@ export default function OrderDetailPage() {
   async function load() {
     const r = await api.get(`/orders/${orderNumber}`);
     setOrder(r.data.data);
+    return r.data.data as Order;
   }
 
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [orderNumber]);
+  /**
+   * Pull the latest payment status from Midtrans into our backend, then
+   * refresh the local UI. This is what saves us when the Midtrans webhook
+   * cannot reach our localhost:8000 — without it the order would stay
+   * "Menunggu Pembayaran" forever even after the customer paid.
+   */
+  async function sync(): Promise<Order | null> {
+    try {
+      const r = await api.post(`/orders/${orderNumber}/sync-status`);
+      const fresh = r.data?.data as Order | undefined;
+      if (fresh) {
+        setOrder(fresh);
+        if (r.data?.changed && fresh.status === 'paid') {
+          toast.success('Pembayaran terkonfirmasi');
+        }
+        return fresh;
+      }
+    } catch {
+      /* ignore — sync is best-effort, the page still works without it */
+    }
+    return null;
+  }
+
+  // Initial load + sync once on mount.
+  useEffect(() => {
+    (async () => {
+      const o = await load();
+      if (o.status === 'pending') await sync();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderNumber]);
+
+  // While the order is still pending (e.g. user paid via VA and Midtrans
+  // hasn't notified us yet), poll every 5s for up to 2 minutes so the UI
+  // updates automatically once the bank confirms the transfer.
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (!order || order.status !== 'pending') {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      return;
+    }
+    if (pollRef.current) return; // already polling
+    let ticks = 0;
+    pollRef.current = setInterval(async () => {
+      ticks += 1;
+      const fresh = await sync();
+      if ((fresh && fresh.status !== 'pending') || ticks >= 24 /* 2 min @ 5s */) {
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    }, 5000);
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [order?.status]);
 
   async function cancel() {
     if (!confirm('Batalkan pesanan ini?')) return;
@@ -64,10 +126,17 @@ export default function OrderDetailPage() {
       }
 
       await paySnap(token, {
-        onSuccess: async () => { toast.success('Pembayaran berhasil'); await load(); },
-        onPending: async () => { toast('Menunggu konfirmasi pembayaran...'); await load(); },
+        onSuccess: async () => {
+          // Pull the real status from Midtrans right away — don't wait for
+          // the (possibly unreachable) webhook.
+          await sync();
+        },
+        onPending: async () => {
+          toast('Menunggu konfirmasi pembayaran...');
+          await sync();
+        },
         onError:   () => toast.error('Pembayaran gagal'),
-        onClose:   async () => { await load(); },
+        onClose:   async () => { await sync(); },
       });
     } catch (e) {
       toast.error(apiError(e));
@@ -114,13 +183,18 @@ export default function OrderDetailPage() {
                 atau cicilan (Akulaku, Kredivo).
               </div>
             </div>
-            <button onClick={payNow} disabled={paying}
-                    className="btn-primary whitespace-nowrap disabled:opacity-50">
-              {paying ? 'Memuat...' : 'Bayar Sekarang'}
-            </button>
+            <div className="flex gap-2 whitespace-nowrap">
+              <button onClick={() => sync()} className="btn-outline disabled:opacity-50" disabled={paying}>
+                Cek Status
+              </button>
+              <button onClick={payNow} disabled={paying} className="btn-primary disabled:opacity-50">
+                {paying ? 'Memuat...' : 'Bayar Sekarang'}
+              </button>
+            </div>
           </div>
           <div className="mt-2 text-xs text-gray-500">
             Total yang harus dibayar: <b>{formatRupiah(order.total)}</b>
+            <span className="ml-2">· Status diperiksa otomatis tiap 5 detik.</span>
           </div>
         </div>
       )}

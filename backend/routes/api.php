@@ -64,6 +64,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/orders/checkout',  [OrderController::class, 'checkout']);
         Route::post('/orders/{orderNumber}/cancel', [OrderController::class, 'cancel']);
         Route::post('/orders/{orderNumber}/repay',  [OrderController::class, 'repay']);
+        Route::post('/orders/{orderNumber}/sync-status', [OrderController::class, 'syncStatus']);
     });
 
     // Admin-only
