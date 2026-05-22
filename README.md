@@ -77,6 +77,10 @@ touch database/database.sqlite
 # Migrasi + seed (bikin admin, kategori, 10 produk dummy, 2 voucher)
 php artisan migrate --seed
 
+# Buat symlink supaya foto produk yang di-upload admin bisa diakses publik
+# (cuma perlu sekali per environment)
+php artisan storage:link
+
 # Jalankan API di http://localhost:8000
 php artisan serve
 ```
@@ -250,12 +254,10 @@ rancoautoshop/
 
 ## Rencana lanjutan (di luar Fase 1)
 
-- Upload gambar ke S3 / disk lokal (sekarang admin input URL)
 - Notifikasi email/WA saat status pesanan berubah
 - Auto-tracking resi (webhook kurir)
 - Print label pengiriman (PDF) dari halaman admin
 - Review & rating produk
-- Alamat tersimpan per pelanggan (model sudah siap, UI belum)
 - Rate limiter untuk OTP & login
 - Unit & integration tests
 

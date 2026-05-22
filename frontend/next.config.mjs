@@ -13,6 +13,8 @@ const nextConfig = {
     return [
       // Proxy /api/* → Laravel, so CORS headaches go away in dev
       { source: '/api/:path*', destination: `${api}/api/:path*` },
+      // Proxy /storage/* → Laravel public disk (uploaded product images, etc.)
+      { source: '/storage/:path*', destination: `${api}/storage/:path*` },
     ];
   },
 };

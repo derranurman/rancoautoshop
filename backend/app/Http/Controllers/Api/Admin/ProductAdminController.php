@@ -6,8 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Product;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
-use Illuminate\Validation\Rule;
 
 class ProductAdminController extends Controller
 {
@@ -39,14 +39,53 @@ class ProductAdminController extends Controller
         if (isset($data['name']) && $data['name'] !== $product->name) {
             $data['slug'] = $this->uniqueSlug($data['name'], $product->id);
         }
+
+        // Best-effort cleanup: delete files for images that were dropped.
+        if (array_key_exists('images', $data)) {
+            $kept = collect($data['images'] ?? [])->map(fn ($u) => $this->relativeStoragePath($u))->filter()->values();
+            $oldPaths = collect($product->images ?? [])->map(fn ($u) => $this->relativeStoragePath($u))->filter()->values();
+            $toDelete = $oldPaths->diff($kept);
+            foreach ($toDelete as $p) {
+                Storage::disk('public')->delete($p);
+            }
+        }
+
         $product->update($data);
         return response()->json(['data' => $product->fresh('category')]);
     }
 
     public function destroy(Product $product): JsonResponse
     {
+        // Delete uploaded files if any.
+        foreach ((array) ($product->images ?? []) as $img) {
+            $p = $this->relativeStoragePath($img);
+            if ($p) Storage::disk('public')->delete($p);
+        }
         $product->delete();
         return response()->json(['message' => 'deleted']);
+    }
+
+    /**
+     * Upload a single product image and return the URL the form should store.
+     *
+     * Returns an origin-relative URL (`/storage/products/<file>`) so the
+     * Next.js dev rewrite can proxy it transparently.
+     */
+    public function uploadImage(Request $request): JsonResponse
+    {
+        $request->validate([
+            'image' => ['required', 'image', 'mimes:jpg,jpeg,png,webp,gif', 'max:5120'], // 5 MB
+        ]);
+
+        $file = $request->file('image');
+        $name = Str::uuid()->toString().'.'.strtolower($file->getClientOriginalExtension() ?: $file->extension());
+        $path = $file->storeAs('products', $name, 'public'); // products/<uuid>.jpg
+
+        return response()->json([
+            'path' => $path,
+            'url'  => '/storage/'.$path,                       // for frontend (relative)
+            'absolute_url' => Storage::disk('public')->url($path),
+        ], 201);
     }
 
     protected function validated(Request $request, ?int $ignoreId = null): array
@@ -60,7 +99,7 @@ class ProductAdminController extends Controller
             'stock'            => ['required', 'integer', 'min:0'],
             'weight'           => ['required', 'integer', 'min:1'],
             'images'           => ['nullable', 'array'],
-            'images.*'         => ['string'],
+            'images.*'         => ['string'], // either /storage/... path or full URL
             'is_active'        => ['boolean'],
         ]);
     }
@@ -74,5 +113,25 @@ class ProductAdminController extends Controller
             $slug = $base.'-'.$i++;
         }
         return $slug;
+    }
+
+    /**
+     * Convert a stored image string into a public-disk relative path
+     * (e.g. "products/abc.jpg") if it points to our own storage; otherwise null.
+     */
+    protected function relativeStoragePath(?string $url): ?string
+    {
+        if (! $url) return null;
+
+        // Strip absolute APP_URL prefix if present so we can detect /storage/.
+        $appUrl = rtrim((string) config('app.url'), '/');
+        if ($appUrl && str_starts_with($url, $appUrl)) {
+            $url = substr($url, strlen($appUrl));
+        }
+
+        if (str_starts_with($url, '/storage/')) {
+            return substr($url, strlen('/storage/'));
+        }
+        return null;
     }
 }
