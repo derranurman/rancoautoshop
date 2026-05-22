@@ -36,6 +36,9 @@ export default function CheckoutPage() {
   // Saved addresses
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [selectedAddrId, setSelectedAddrId] = useState<number | 'new'>('new');
+  // Whether the editable form is visible. We keep it hidden when a saved
+  // address is being used so checkout stays clean & one-tap.
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) { router.replace('/login'); return; }
@@ -82,12 +85,18 @@ export default function CheckoutPage() {
   }, [provinceId]);
 
   // Auto-pick the default address (or first one) the first time we get the list.
+  // When an address is auto-applied we keep the form collapsed.
   useEffect(() => {
     if (selectedAddrId !== 'new') return;
-    if (addresses.length === 0) return;
+    if (addresses.length === 0) {
+      // No saved addresses → user has to fill the form by hand.
+      setEditing(true);
+      return;
+    }
     const def = addresses.find((a) => a.is_default) ?? addresses[0];
     applyAddress(def);
     setSelectedAddrId(def.id);
+    setEditing(false);
   }, [addresses]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function applyAddress(a: Address) {
@@ -100,7 +109,6 @@ export default function CheckoutPage() {
     if (prov) {
       setProvinceId(prov.province_id);
       // Cities will load via the effect; we set city_id when they arrive.
-      // Stash desired city via a one-shot effect below.
       pendingCityIdRef.current = a.city_id ?? null;
       pendingCityNameRef.current = a.city ?? null;
     } else {
@@ -146,6 +154,7 @@ export default function CheckoutPage() {
       setProvinceId('');
       setCityId('');
       setPostalCode('');
+      setEditing(true);
       return;
     }
     const id = Number(value);
@@ -153,6 +162,7 @@ export default function CheckoutPage() {
     if (!addr) return;
     setSelectedAddrId(id);
     applyAddress(addr);
+    setEditing(false);
   }
 
   async function calcCost() {
@@ -210,16 +220,12 @@ export default function CheckoutPage() {
       const isMock = !!r.data.mock;
 
       if (!isMock && token) {
-        // Open Midtrans Snap so the customer can pick BCA/BNI/BRI/Mandiri VA,
-        // GoPay/ShopeePay/OVO/DANA, QRIS, Indomaret/Alfamart, kartu kredit, dll.
         await paySnap(token, {
           onSuccess: () => router.push(`/orders/${orderNumber}`),
           onPending: () => router.push(`/orders/${orderNumber}`),
           onClose:   () => router.push(`/orders/${orderNumber}`),
         });
       } else {
-        // Dev/mock mode — go straight to detail page where the user can
-        // tap "Bayar Sekarang" once Midtrans is configured.
         router.push(`/orders/${orderNumber}`);
       }
     } catch (e) {
@@ -229,6 +235,12 @@ export default function CheckoutPage() {
 
   if (!cart) return <div className="max-w-4xl mx-auto px-4 py-10 text-gray-500">Memuat keranjang...</div>;
   if (cart.items.length === 0) return <div className="max-w-4xl mx-auto px-4 py-10">Keranjang kosong.</div>;
+
+  // The summary view of the currently-selected saved address (when not editing).
+  const selectedAddr = typeof selectedAddrId === 'number'
+    ? addresses.find((a) => a.id === selectedAddrId) ?? null
+    : null;
+
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 grid md:grid-cols-3 gap-4">
       <div className="md:col-span-2 space-y-4">
@@ -251,78 +263,157 @@ export default function CheckoutPage() {
             </Link>
           </div>
 
-          {addresses.length > 0 && (
-            <div className="mb-3">
-              <label className="label">Pilih dari alamat tersimpan</label>
-              <select
-                className="input"
-                value={String(selectedAddrId)}
-                onChange={(e) => onAddressPick(e.target.value)}
-              >
-                {addresses.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.label ? `[${a.label}] ` : ''}{a.recipient_name} — {a.city}
-                    {a.is_default ? ' (utama)' : ''}
-                  </option>
-                ))}
-                <option value="new">+ Isi alamat baru di formulir</option>
-              </select>
+          {/* When a saved address is in use AND we're not editing, show a compact
+              summary instead of the full form. The user can switch address or
+              start editing the chosen address inline. */}
+          {selectedAddr && !editing ? (
+            <div className="rounded-lg border border-gray-200 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {selectedAddr.label && (
+                      <span className="text-[10px] uppercase tracking-wide bg-gray-100 px-2 py-0.5 rounded">
+                        {selectedAddr.label}
+                      </span>
+                    )}
+                    <span className="font-semibold">{selectedAddr.recipient_name}</span>
+                    <span className="text-sm text-gray-500">{selectedAddr.phone}</span>
+                    {selectedAddr.is_default && (
+                      <span className="text-[10px] bg-brand/10 text-brand px-2 py-0.5 rounded font-semibold">
+                        Utama
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1 text-sm text-gray-700 whitespace-pre-line">
+                    {selectedAddr.address_line}
+                  </div>
+                  <div className="mt-0.5 text-sm text-gray-500">
+                    {selectedAddr.city}, {selectedAddr.province}
+                    {selectedAddr.postal_code ? ` ${selectedAddr.postal_code}` : ''}
+                  </div>
+                </div>
+                <div className="shrink-0 flex flex-col gap-1 items-stretch">
+                  <button
+                    type="button"
+                    className="btn-outline text-xs"
+                    onClick={() => setEditing(true)}
+                  >
+                    Ubah
+                  </button>
+                  {addresses.length > 1 && (
+                    <select
+                      className="input text-xs"
+                      value={String(selectedAddrId)}
+                      onChange={(e) => onAddressPick(e.target.value)}
+                    >
+                      {addresses.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          Ganti: {a.label ? `[${a.label}] ` : ''}{a.recipient_name}
+                          {a.is_default ? ' (utama)' : ''}
+                        </option>
+                      ))}
+                      <option value="new">+ Alamat baru...</option>
+                    </select>
+                  )}
+                  {addresses.length <= 1 && (
+                    <button
+                      type="button"
+                      className="btn-ghost text-xs"
+                      onClick={() => onAddressPick('new')}
+                    >
+                      + Alamat lain
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
-          )}
+          ) : (
+            <>
+              {addresses.length > 0 && (
+                <div className="mb-3 flex items-end gap-2">
+                  <div className="flex-1">
+                    <label className="label">Pilih dari alamat tersimpan</label>
+                    <select
+                      className="input"
+                      value={String(selectedAddrId)}
+                      onChange={(e) => onAddressPick(e.target.value)}
+                    >
+                      {addresses.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.label ? `[${a.label}] ` : ''}{a.recipient_name} — {a.city}
+                          {a.is_default ? ' (utama)' : ''}
+                        </option>
+                      ))}
+                      <option value="new">+ Isi alamat baru di formulir</option>
+                    </select>
+                  </div>
+                  {selectedAddr && (
+                    <button
+                      type="button"
+                      className="btn-ghost text-xs whitespace-nowrap mb-0.5"
+                      onClick={() => setEditing(false)}
+                    >
+                      Batal ubah
+                    </button>
+                  )}
+                </div>
+              )}
 
-          <div className="grid sm:grid-cols-2 gap-3">
-            <div><label className="label">Nama penerima</label>
-              <input className="input" value={recipient.name}
-                     onChange={(e) => setRecipient({ ...recipient, name: e.target.value })} />
-            </div>
-            <div><label className="label">No. HP penerima</label>
-              <input className="input" value={recipient.phone}
-                     onChange={(e) => setRecipient({ ...recipient, phone: e.target.value })} />
-            </div>
-            <div><label className="label">Provinsi</label>
-              <select className="input" value={provinceId}
-                      onChange={(e) => setProvinceId(e.target.value)}
-                      disabled={provincesLoading}>
-                <option value="">
-                  {provincesLoading
-                    ? '-- memuat provinsi... --'
-                    : provinces.length === 0
-                      ? '-- tidak ada data --'
-                      : '-- pilih provinsi --'}
-                </option>
-                {provinces.map((p, i) => (
-                  <option key={`${p.province_id}-${i}`} value={p.province_id}>{p.province}</option>
-                ))}
-              </select>
-            </div>
-            <div><label className="label">Kota/Kabupaten</label>
-              <select className="input" value={cityId}
-                      onChange={(e) => setCityId(e.target.value)}
-                      disabled={!provinceId || citiesLoading}>
-                <option value="">
-                  {citiesLoading
-                    ? '-- memuat kota... --'
-                    : !provinceId
-                      ? '-- pilih provinsi dulu --'
-                      : cities.length === 0
-                        ? '-- tidak ada data --'
-                        : '-- pilih kota --'}
-                </option>
-                {cities.map((c, i) => (
-                  <option key={`${c.city_id}-${i}`} value={c.city_id}>{c.type} {c.city_name}</option>
-                ))}
-              </select>
-            </div>
-            <div><label className="label">Kode Pos</label>
-              <input className="input" value={postalCode}
-                     onChange={(e) => setPostalCode(e.target.value)}
-                     placeholder={cities.find((c) => c.city_id === cityId)?.postal_code ?? ''} />
-            </div>
-            <div className="sm:col-span-2"><label className="label">Alamat lengkap</label>
-              <textarea className="input" rows={2} value={recipient.address}
-                        onChange={(e) => setRecipient({ ...recipient, address: e.target.value })} />
-            </div>
-          </div>
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div><label className="label">Nama penerima</label>
+                  <input className="input" value={recipient.name}
+                         onChange={(e) => setRecipient({ ...recipient, name: e.target.value })} />
+                </div>
+                <div><label className="label">No. HP penerima</label>
+                  <input className="input" value={recipient.phone}
+                         onChange={(e) => setRecipient({ ...recipient, phone: e.target.value })} />
+                </div>
+                <div><label className="label">Provinsi</label>
+                  <select className="input" value={provinceId}
+                          onChange={(e) => setProvinceId(e.target.value)}
+                          disabled={provincesLoading}>
+                    <option value="">
+                      {provincesLoading
+                        ? '-- memuat provinsi... --'
+                        : provinces.length === 0
+                          ? '-- tidak ada data --'
+                          : '-- pilih provinsi --'}
+                    </option>
+                    {provinces.map((p, i) => (
+                      <option key={`${p.province_id}-${i}`} value={p.province_id}>{p.province}</option>
+                    ))}
+                  </select>
+                </div>
+                <div><label className="label">Kota/Kabupaten</label>
+                  <select className="input" value={cityId}
+                          onChange={(e) => setCityId(e.target.value)}
+                          disabled={!provinceId || citiesLoading}>
+                    <option value="">
+                      {citiesLoading
+                        ? '-- memuat kota... --'
+                        : !provinceId
+                          ? '-- pilih provinsi dulu --'
+                          : cities.length === 0
+                            ? '-- tidak ada data --'
+                            : '-- pilih kota --'}
+                    </option>
+                    {cities.map((c, i) => (
+                      <option key={`${c.city_id}-${i}`} value={c.city_id}>{c.type} {c.city_name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div><label className="label">Kode Pos</label>
+                  <input className="input" value={postalCode}
+                         onChange={(e) => setPostalCode(e.target.value)}
+                         placeholder={cities.find((c) => c.city_id === cityId)?.postal_code ?? ''} />
+                </div>
+                <div className="sm:col-span-2"><label className="label">Alamat lengkap</label>
+                  <textarea className="input" rows={2} value={recipient.address}
+                            onChange={(e) => setRecipient({ ...recipient, address: e.target.value })} />
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="card p-4">
@@ -380,4 +471,3 @@ export default function CheckoutPage() {
     </div>
   );
 }
-
