@@ -20,6 +20,8 @@ export default function CheckoutPage() {
   const [recipient, setRecipient] = useState({ name: '', phone: '', address: '' });
   const [provinces, setProvinces] = useState<Province[]>([]);
   const [cities, setCities] = useState<City[]>([]);
+  const [provincesLoading, setProvincesLoading] = useState(true);
+  const [citiesLoading, setCitiesLoading] = useState(false);
   const [provinceId, setProvinceId] = useState('');
   const [cityId, setCityId] = useState('');
   const [postalCode, setPostalCode] = useState('');
@@ -42,7 +44,11 @@ export default function CheckoutPage() {
         .then((r) => setAddresses(r.data.data ?? []))
         .catch(() => setAddresses([]));
     }
-    api.get('/shipping/provinces').then((r) => setProvinces(r.data.data));
+    setProvincesLoading(true);
+    api.get('/shipping/provinces')
+      .then((r) => setProvinces(r.data.data ?? []))
+      .catch((e) => toast.error('Gagal memuat daftar provinsi: ' + apiError(e)))
+      .finally(() => setProvincesLoading(false));
   }, [user, authLoading, fetchCart, router]);
 
   useEffect(() => {
@@ -58,8 +64,14 @@ export default function CheckoutPage() {
   // Load cities whenever province changes (and reset downstream selections).
   useEffect(() => {
     if (provinceId) {
+      setCitiesLoading(true);
       api.get('/shipping/cities', { params: { province_id: provinceId } })
-        .then((r) => setCities(r.data.data));
+        .then((r) => setCities(r.data.data ?? []))
+        .catch((e) => {
+          toast.error('Gagal memuat daftar kota: ' + apiError(e));
+          setCities([]);
+        })
+        .finally(() => setCitiesLoading(false));
     } else {
       setCities([]);
     }
@@ -268,15 +280,37 @@ export default function CheckoutPage() {
                      onChange={(e) => setRecipient({ ...recipient, phone: e.target.value })} />
             </div>
             <div><label className="label">Provinsi</label>
-              <select className="input" value={provinceId} onChange={(e) => setProvinceId(e.target.value)}>
-                <option value="">-- pilih provinsi --</option>
-                {provinces.map((p) => <option key={p.province_id} value={p.province_id}>{p.province}</option>)}
+              <select className="input" value={provinceId}
+                      onChange={(e) => setProvinceId(e.target.value)}
+                      disabled={provincesLoading}>
+                <option value="">
+                  {provincesLoading
+                    ? '-- memuat provinsi... --'
+                    : provinces.length === 0
+                      ? '-- tidak ada data --'
+                      : '-- pilih provinsi --'}
+                </option>
+                {provinces.map((p, i) => (
+                  <option key={`${p.province_id}-${i}`} value={p.province_id}>{p.province}</option>
+                ))}
               </select>
             </div>
             <div><label className="label">Kota/Kabupaten</label>
-              <select className="input" value={cityId} onChange={(e) => setCityId(e.target.value)} disabled={!provinceId}>
-                <option value="">-- pilih kota --</option>
-                {cities.map((c) => <option key={c.city_id} value={c.city_id}>{c.type} {c.city_name}</option>)}
+              <select className="input" value={cityId}
+                      onChange={(e) => setCityId(e.target.value)}
+                      disabled={!provinceId || citiesLoading}>
+                <option value="">
+                  {citiesLoading
+                    ? '-- memuat kota... --'
+                    : !provinceId
+                      ? '-- pilih provinsi dulu --'
+                      : cities.length === 0
+                        ? '-- tidak ada data --'
+                        : '-- pilih kota --'}
+                </option>
+                {cities.map((c, i) => (
+                  <option key={`${c.city_id}-${i}`} value={c.city_id}>{c.type} {c.city_name}</option>
+                ))}
               </select>
             </div>
             <div><label className="label">Kode Pos</label>
