@@ -9,6 +9,8 @@ import type { Category } from '@/lib/types';
 interface AdminProduct {
   id: number; name: string; slug: string;
   price: number; operational_cost: number;
+  /** Harga jual = price + operational_cost (yang dilihat pelanggan). */
+  selling_price?: number;
   stock: number; weight: number; is_active: boolean;
   category?: { id: number; name: string; slug: string } | null;
 }
@@ -131,15 +133,18 @@ export default function AdminProductsPage() {
               <th className="px-3 py-2 text-right">Biaya Ops</th>
               <th className="px-3 py-2 text-right">Stok</th>
               <th className="px-3 py-2">Status</th>
+              <th className="px-3 py-2 text-right" title="Harga + Biaya Ops — yang dilihat pelanggan">
+                Harga Jual
+              </th>
               <th className="px-3 py-2"></th>
             </tr>
           </thead>
           <tbody>
             {loading && (
-              <tr><td colSpan={7} className="px-3 py-10 text-center text-gray-500">Memuat...</td></tr>
+              <tr><td colSpan={8} className="px-3 py-10 text-center text-gray-500">Memuat...</td></tr>
             )}
             {!loading && products.length === 0 && (
-              <tr><td colSpan={7} className="px-3 py-10 text-center text-gray-500">
+              <tr><td colSpan={8} className="px-3 py-10 text-center text-gray-500">
                 {search || categoryFilter ? 'Tidak ada produk yang cocok dengan filter.' : 'Belum ada produk.'}
               </td></tr>
             )}
@@ -147,6 +152,9 @@ export default function AdminProductsPage() {
               const opsPct = p.price > 0
                 ? ((p.operational_cost / p.price) * 100).toFixed(1)
                 : null;
+              // Prefer the server-computed selling_price when available, fall
+              // back to local sum so older API responses still render.
+              const sellingPrice = p.selling_price ?? (p.price + p.operational_cost);
               return (
                 <tr key={p.id} className="border-t border-gray-100">
                   <td className="px-3 py-2 font-medium">{p.name}</td>
@@ -161,6 +169,10 @@ export default function AdminProductsPage() {
                     <span className={`chip ${p.is_active ? 'bg-green-100 text-green-800' : 'bg-gray-100'}`}>
                       {p.is_active ? 'Aktif' : 'Nonaktif'}
                     </span>
+                  </td>
+                  <td className="px-3 py-2 text-right font-semibold">
+                    <div>{formatRupiah(sellingPrice)}</div>
+                    <div className="text-[10px] text-gray-500 font-normal">Harga + Biaya Ops</div>
                   </td>
                   <td className="px-3 py-2 text-right space-x-2">
                     <Link href={`/admin/products/${p.id}`} className="btn-outline">Edit</Link>

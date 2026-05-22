@@ -23,6 +23,14 @@ class Product extends Model
         'is_active',
     ];
 
+    /**
+     * Always serialize selling_price (price + operational_cost) so any client
+     * — admin product table, customer storefront, cart, etc. — gets the
+     * "harga jual ke user" without each endpoint having to compute it
+     * manually. Shipping is added on top at checkout, not here.
+     */
+    protected $appends = ['selling_price'];
+
     protected function casts(): array
     {
         return [
