@@ -63,6 +63,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/orders/{orderNumber}', [OrderController::class, 'show']);
         Route::post('/orders/checkout',  [OrderController::class, 'checkout']);
         Route::post('/orders/{orderNumber}/cancel', [OrderController::class, 'cancel']);
+        Route::post('/orders/{orderNumber}/repay',  [OrderController::class, 'repay']);
     });
 
     // Admin-only

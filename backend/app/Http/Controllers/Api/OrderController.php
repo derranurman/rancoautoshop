@@ -173,4 +173,36 @@ class OrderController extends Controller
 
         return response()->json(['data' => $order->fresh(['items', 'trackingEvents'])]);
     }
+
+    /**
+     * Re-issue (or return existing) Midtrans Snap token so the customer can
+     * resume payment from the order detail page if they closed the popup or
+     * came back later. Only works while the order is still pending.
+     */
+    public function repay(Request $request, string $orderNumber, MidtransService $mt): JsonResponse
+    {
+        $order = Order::where('order_number', $orderNumber)
+            ->where('user_id', $request->user()->id)
+            ->with(['items', 'user'])
+            ->firstOrFail();
+
+        abort_if($order->status !== Order::STATUS_PENDING, 422, 'Pesanan ini tidak bisa dibayar lagi.');
+
+        // Always request a fresh token; old ones may have expired (Snap tokens
+        // last ~24h on sandbox). The Midtrans service handles the dev mock.
+        $snap = $mt->createSnapToken($order);
+        $order->update([
+            'midtrans_snap_token' => $snap['token'] ?? null,
+            'midtrans_order_id'   => $order->order_number,
+        ]);
+
+        return response()->json([
+            'order'        => $order->fresh(['items', 'trackingEvents']),
+            'snap_token'   => $snap['token'] ?? null,
+            'redirect_url' => $snap['redirect_url'] ?? null,
+            'mock'         => $snap['mock'] ?? false,
+            'client_key'   => config('services.midtrans.client_key'),
+            'snap_url'     => config('services.midtrans.snap_url'),
+        ]);
+    }
 }

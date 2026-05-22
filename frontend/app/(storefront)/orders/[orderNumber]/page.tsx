@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { api, apiError, formatRupiah } from '@/lib/api';
+import { paySnap } from '@/lib/midtrans';
 import type { Order } from '@/lib/types';
 import { OrderTimeline } from '@/components/OrderTimeline';
 
@@ -15,13 +16,14 @@ const STATUS_LABEL: Record<string, string> = {
 export default function OrderDetailPage() {
   const { orderNumber } = useParams<{ orderNumber: string }>();
   const [order, setOrder] = useState<Order | null>(null);
+  const [paying, setPaying] = useState(false);
 
   async function load() {
     const r = await api.get(`/orders/${orderNumber}`);
     setOrder(r.data.data);
   }
 
-  useEffect(() => { load(); }, [orderNumber]);
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [orderNumber]);
 
   async function cancel() {
     if (!confirm('Batalkan pesanan ini?')) return;
@@ -32,7 +34,51 @@ export default function OrderDetailPage() {
     } catch (e) { toast.error(apiError(e)); }
   }
 
+  /**
+   * Open the Midtrans Snap popup so the customer can pick a payment method
+   * (BCA / Mandiri / BNI / Permata VA, GoPay, ShopeePay, OVO, DANA, QRIS,
+   * Indomaret, Alfamart, kartu kredit, Akulaku, Kredivo, ...).
+   * We always ask the backend for a fresh token via /repay to avoid expired ones.
+   */
+  async function payNow() {
+    if (paying) return;
+    setPaying(true);
+    try {
+      const r = await api.post(`/orders/${orderNumber}/repay`);
+      const token: string | null = r.data.snap_token ?? null;
+      const isMock: boolean = !!r.data.mock;
+
+      if (!token) {
+        toast.error('Token pembayaran tidak tersedia.');
+        return;
+      }
+
+      if (isMock) {
+        toast(
+          'Mode demo: Midtrans belum dikonfigurasi. Set MIDTRANS_SERVER_KEY & '
+          + 'NEXT_PUBLIC_MIDTRANS_CLIENT_KEY untuk popup pembayaran asli.',
+          { duration: 6000 },
+        );
+        await load();
+        return;
+      }
+
+      await paySnap(token, {
+        onSuccess: async () => { toast.success('Pembayaran berhasil'); await load(); },
+        onPending: async () => { toast('Menunggu konfirmasi pembayaran...'); await load(); },
+        onError:   () => toast.error('Pembayaran gagal'),
+        onClose:   async () => { await load(); },
+      });
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setPaying(false);
+    }
+  }
+
   if (!order) return <div className="max-w-3xl mx-auto px-4 py-10 text-gray-500">Memuat...</div>;
+
+  const isPending = order.status === 'pending';
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
@@ -54,6 +100,30 @@ export default function OrderDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Big call-to-action so customers don't get stuck on "Menunggu Pembayaran".
+          Picks BCA/Mandiri/BNI/Permata VA, GoPay/ShopeePay/OVO/DANA, QRIS, etc. */}
+      {isPending && (
+        <div className="card p-4 border-brand bg-brand/5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div className="font-semibold">Selesaikan pembayaranmu</div>
+              <div className="text-sm text-gray-600">
+                Pilih metode pembayaran: Transfer Bank (BCA, BNI, BRI, Mandiri, Permata),
+                E-wallet (GoPay, ShopeePay, OVO, DANA), QRIS, Indomaret/Alfamart, kartu kredit,
+                atau cicilan (Akulaku, Kredivo).
+              </div>
+            </div>
+            <button onClick={payNow} disabled={paying}
+                    className="btn-primary whitespace-nowrap disabled:opacity-50">
+              {paying ? 'Memuat...' : 'Bayar Sekarang'}
+            </button>
+          </div>
+          <div className="mt-2 text-xs text-gray-500">
+            Total yang harus dibayar: <b>{formatRupiah(order.total)}</b>
+          </div>
+        </div>
+      )}
 
       <div className="card p-4">
         <div className="flex items-center justify-between mb-3">
@@ -91,7 +161,7 @@ export default function OrderDetailPage() {
         <div className="text-gray-600 whitespace-pre-line">{order.shipping_address}</div>
       </div>
 
-      {order.status === 'pending' && (
+      {isPending && (
         <button onClick={cancel} className="btn-outline text-red-600 border-red-300 w-full">
           Batalkan Pesanan
         </button>

@@ -6,6 +6,7 @@ import Link from 'next/link';
 import toast from 'react-hot-toast';
 import { api, apiError, formatRupiah } from '@/lib/api';
 import { useAuth, useCart } from '@/lib/stores';
+import { paySnap } from '@/lib/midtrans';
 import type { Address } from '@/lib/types';
 
 type Province = { province_id: string; province: string };
@@ -206,19 +207,19 @@ export default function CheckoutPage() {
       toast.success('Pesanan dibuat');
       const orderNumber = r.data.order.order_number;
       const token = r.data.snap_token as string | null;
-      const clientKey = process.env.NEXT_PUBLIC_MIDTRANS_CLIENT_KEY;
-      const snapUrl   = process.env.NEXT_PUBLIC_MIDTRANS_SNAP_URL
-        || 'https://app.sandbox.midtrans.com/snap/snap.js';
+      const isMock = !!r.data.mock;
 
-      if (!r.data.mock && token && clientKey) {
-        await loadSnapScript(snapUrl, clientKey);
-        // @ts-expect-error: global injected by snap.js
-        window.snap.pay(token, {
+      if (!isMock && token) {
+        // Open Midtrans Snap so the customer can pick BCA/BNI/BRI/Mandiri VA,
+        // GoPay/ShopeePay/OVO/DANA, QRIS, Indomaret/Alfamart, kartu kredit, dll.
+        await paySnap(token, {
           onSuccess: () => router.push(`/orders/${orderNumber}`),
           onPending: () => router.push(`/orders/${orderNumber}`),
           onClose:   () => router.push(`/orders/${orderNumber}`),
         });
       } else {
+        // Dev/mock mode — go straight to detail page where the user can
+        // tap "Bayar Sekarang" once Midtrans is configured.
         router.push(`/orders/${orderNumber}`);
       }
     } catch (e) {
@@ -228,7 +229,6 @@ export default function CheckoutPage() {
 
   if (!cart) return <div className="max-w-4xl mx-auto px-4 py-10 text-gray-500">Memuat keranjang...</div>;
   if (cart.items.length === 0) return <div className="max-w-4xl mx-auto px-4 py-10">Keranjang kosong.</div>;
-
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 grid md:grid-cols-3 gap-4">
       <div className="md:col-span-2 space-y-4">
@@ -372,20 +372,12 @@ export default function CheckoutPage() {
         <button onClick={onSubmit} disabled={submitting || !chosenCost} className="btn-primary w-full mt-2">
           {submitting ? 'Memproses...' : 'Bayar Sekarang'}
         </button>
+        <div className="text-[11px] text-gray-500 text-center pt-1">
+          Pembayaran via Midtrans: BCA / BNI / BRI / Mandiri / Permata VA, GoPay,
+          ShopeePay, OVO, DANA, QRIS, Indomaret/Alfamart, kartu kredit.
+        </div>
       </div>
     </div>
   );
-}
-
-function loadSnapScript(url: string, clientKey: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (document.querySelector(`script[src="${url}"]`)) { resolve(); return; }
-    const s = document.createElement('script');
-    s.src = url;
-    s.setAttribute('data-client-key', clientKey);
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error('snap.js gagal dimuat'));
-    document.head.appendChild(s);
-  });
 }
 

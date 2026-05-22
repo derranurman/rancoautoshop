@@ -64,6 +64,25 @@ class MidtransService
             'callbacks' => [
                 'finish' => rtrim(env('FRONTEND_URL', 'http://localhost:3000'), '/').'/orders/'.$order->order_number,
             ],
+            // Tampilkan semua metode pembayaran utama di popup Snap. Kalau ada
+            // yang belum aktif di dashboard Midtrans, otomatis tidak muncul.
+            // Hapus key ini bila kamu mau Snap pakai default-nya saja.
+            'enabled_payments' => [
+                // Virtual Account (transfer bank)
+                'bca_va', 'bni_va', 'bri_va', 'permata_va', 'echannel', 'cimb_va', 'other_va',
+                // E-wallet
+                'gopay', 'shopeepay', 'qris',
+                // Convenience store
+                'indomaret', 'alfamart',
+                // Kartu kredit / cicilan
+                'credit_card',
+                // Cardless / paylater
+                'akulaku', 'kredivo',
+                // Direct debit
+                'bca_klikpay', 'bca_klikbca', 'bri_epay', 'cimb_clicks', 'danamon_online',
+            ],
+            // QRIS langsung tampil (bisa di-scan dari OVO, DANA, LinkAja, dll).
+            'credit_card' => ['secure' => true],
         ];
 
         // Append shipping as an item so totals match.
