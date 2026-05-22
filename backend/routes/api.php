@@ -71,6 +71,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/reports/sales',         [DashboardController::class, 'salesReport']);
 
         Route::apiResource('categories',     CategoryAdminController::class)->except(['show']);
+        Route::post('/products/upload-image', [ProductAdminController::class, 'uploadImage']);
         Route::apiResource('products',       ProductAdminController::class);
         Route::apiResource('vouchers',       VoucherAdminController::class)->except(['show']);
 
