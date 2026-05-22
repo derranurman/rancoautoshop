@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { api, apiError, formatRupiah } from '@/lib/api';
@@ -36,6 +36,19 @@ export default function ProductForm({ productId }: { productId?: number }) {
   const [loading, setLoading] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
+  /**
+   * When false (default), `operational_cost` is auto-derived from
+   *   harga × persen kategori
+   * and the input is read-only. When the admin clicks "Atur manual",
+   * we flip this to true and let them type any value.
+   *
+   * For new products the form starts in auto mode. For existing products
+   * we infer: if their saved operational_cost matches the current category
+   * percent calc, treat as auto; otherwise default to manual so we don't
+   * silently overwrite a custom value on first save.
+   */
+  const [opsManual, setOpsManual] = useState(false);
+
   useEffect(() => {
     api.get('/admin/categories').then((r) => setCats(r.data.data));
     if (productId) {
@@ -51,6 +64,58 @@ export default function ProductForm({ productId }: { productId?: number }) {
       });
     }
   }, [productId]);
+
+  /**
+   * Persen biaya ops dari kategori yang dipilih. Pakai useMemo agar perubahan
+   * select tidak men-trigger re-compute kalau cats belum loaded.
+   */
+  const selectedCategory = useMemo(() => {
+    if (form.category_id === '') return null;
+    return cats.find((c) => c.id === form.category_id) ?? null;
+  }, [cats, form.category_id]);
+
+  const categoryPercent = useMemo(() => {
+    if (!selectedCategory) return 0;
+    const raw = selectedCategory.operational_cost_percent;
+    const n = typeof raw === 'string' ? parseFloat(raw) : Number(raw ?? 0);
+    return Number.isFinite(n) ? n : 0;
+  }, [selectedCategory]);
+
+  /** Auto-computed ops cost based on current price + selected category. */
+  const autoOpsCost = useMemo(
+    () => Math.round((form.price || 0) * categoryPercent / 100),
+    [form.price, categoryPercent],
+  );
+
+  // When admin loads an existing product, decide auto vs manual based on whether
+  // the stored value matches what auto would compute right now. This runs once
+  // whenever both the product data and categories are available.
+  const decidedRef = useRef(false);
+  useEffect(() => {
+    if (decidedRef.current) return;
+    if (cats.length === 0) return;
+    if (productId && form.name === '') return; // product not yet loaded
+    decidedRef.current = true;
+    if (productId) {
+      // Existing product: keep stored value, default to manual mode unless it
+      // matches the auto calc (within 1 rupiah of rounding).
+      const matches = Math.abs(form.operational_cost - autoOpsCost) <= 1;
+      setOpsManual(!matches);
+    } else {
+      // New product: start in auto.
+      setOpsManual(false);
+      setForm((f) => ({ ...f, operational_cost: 0 }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cats, productId, form.name]);
+
+  // Whenever auto mode is on, keep the form's operational_cost in sync with
+  // the auto value so what we display in the read-only input matches what we
+  // submit.
+  useEffect(() => {
+    if (opsManual) return;
+    setForm((f) => (f.operational_cost === autoOpsCost ? f : { ...f, operational_cost: autoOpsCost }));
+  }, [opsManual, autoOpsCost]);
 
   function addImageUrl() {
     const v = imageInput.trim();
@@ -94,7 +159,6 @@ export default function ProductForm({ productId }: { productId?: number }) {
 
     setUploading((n) => n + valid.length);
 
-    // Upload in parallel; collect URLs in order so the displayed order is stable.
     const results = await Promise.all(
       valid.map(async (file) => {
         const fd = new FormData();
@@ -122,7 +186,7 @@ export default function ProductForm({ productId }: { productId?: number }) {
   function onPick(e: React.ChangeEvent<HTMLInputElement>) {
     if (e.target.files && e.target.files.length) {
       void uploadFiles(e.target.files);
-      e.target.value = ''; // allow re-selecting the same file
+      e.target.value = '';
     }
   }
 
@@ -134,7 +198,16 @@ export default function ProductForm({ productId }: { productId?: number }) {
   async function submit() {
     setLoading(true);
     try {
-      const payload = { ...form, category_id: form.category_id === '' ? null : form.category_id };
+      const payload: Record<string, unknown> = {
+        ...form,
+        category_id: form.category_id === '' ? null : form.category_id,
+      };
+      // In auto mode we omit operational_cost so the backend recomputes
+      // from category percent. This keeps both client and server logic
+      // in sync if the percent changes later.
+      if (!opsManual) {
+        delete payload.operational_cost;
+      }
       if (productId) await api.put(`/admin/products/${productId}`, payload);
       else await api.post('/admin/products', payload);
       toast.success('Produk disimpan');
@@ -158,8 +231,27 @@ export default function ProductForm({ productId }: { productId?: number }) {
             <select className="input" value={form.category_id}
                     onChange={(e) => setForm({ ...form, category_id: e.target.value === '' ? '' : +e.target.value })}>
               <option value="">— pilih —</option>
-              {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {cats.map((c) => {
+                const pct = c.operational_cost_percent;
+                const pctNum = typeof pct === 'string' ? parseFloat(pct) : Number(pct ?? 0);
+                return (
+                  <option key={c.id} value={c.id}>
+                    {c.name}{pctNum > 0 ? ` (${pctNum}% ops)` : ''}
+                  </option>
+                );
+              })}
             </select>
+            {selectedCategory && categoryPercent > 0 && (
+              <div className="text-xs text-gray-500 mt-1">
+                Biaya operasional default kategori ini: {categoryPercent}% dari harga.
+              </div>
+            )}
+            {selectedCategory && categoryPercent === 0 && (
+              <div className="text-xs text-yellow-700 mt-1">
+                Kategori ini belum punya persen biaya ops. Atur di
+                halaman Produk &rarr; <b>Kelola Kategori</b>.
+              </div>
+            )}
           </div>
           <div><label className="label">Deskripsi</label>
             <textarea className="input" rows={4} value={form.description}
@@ -174,13 +266,42 @@ export default function ProductForm({ productId }: { productId?: number }) {
 
         <div className="card p-4 space-y-3">
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">Harga dasar (Rp)</label>
+            <div>
+              <label className="label">Harga dasar (Rp)</label>
               <input type="number" className="input" value={form.price}
                      onChange={(e) => setForm({ ...form, price: +e.target.value })} />
             </div>
-            <div><label className="label">Biaya operasional (Rp)</label>
-              <input type="number" className="input" value={form.operational_cost}
-                     onChange={(e) => setForm({ ...form, operational_cost: +e.target.value })} />
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="label !mb-0">Biaya operasional (Rp)</label>
+                <button
+                  type="button"
+                  className="text-xs text-brand hover:underline"
+                  onClick={() => setOpsManual((v) => !v)}
+                >
+                  {opsManual ? 'Pakai otomatis' : 'Atur manual'}
+                </button>
+              </div>
+              <input
+                type="number"
+                className={`input ${opsManual ? '' : 'bg-gray-50 cursor-not-allowed'}`}
+                value={form.operational_cost}
+                onChange={(e) => setForm({ ...form, operational_cost: +e.target.value })}
+                readOnly={!opsManual}
+                tabIndex={opsManual ? 0 : -1}
+              />
+              <div className="text-xs text-gray-500 mt-1">
+                {opsManual ? (
+                  <>Manual override. Klik &ldquo;Pakai otomatis&rdquo; untuk balik ke
+                  hitungan dari kategori.</>
+                ) : selectedCategory && categoryPercent > 0 ? (
+                  <>Otomatis = {formatRupiah(form.price)} &times; {categoryPercent}%
+                  &nbsp;=&nbsp; <b>{formatRupiah(autoOpsCost)}</b>.</>
+                ) : (
+                  <>Pilih kategori dengan persen ops untuk hitungan otomatis,
+                  atau klik &ldquo;Atur manual&rdquo;.</>
+                )}
+              </div>
             </div>
             <div><label className="label">Stok</label>
               <input type="number" className="input" value={form.stock}
@@ -269,7 +390,6 @@ export default function ProductForm({ productId }: { productId?: number }) {
               )}
             </div>
           </div>
-          {/* ----------------------------------------------- */}
         </div>
       </div>
 

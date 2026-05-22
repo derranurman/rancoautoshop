@@ -13,6 +13,13 @@ interface AdminProduct {
   category?: { id: number; name: string; slug: string } | null;
 }
 
+/** Backend returns operational_cost_percent as numeric string (decimal cast). */
+function pct(c: Category): number {
+  const raw = c.operational_cost_percent;
+  const n = typeof raw === 'string' ? parseFloat(raw) : Number(raw ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export default function AdminProductsPage() {
   const [products, setProducts] = useState<AdminProduct[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -20,7 +27,7 @@ export default function AdminProductsPage() {
   const [categoryFilter, setCategoryFilter] = useState<number | ''>('');
   const [loading, setLoading] = useState(true);
 
-  const [showCategoryModal, setShowCategoryModal] = useState(false);
+  const [showManageCategoriesModal, setShowManageCategoriesModal] = useState(false);
   const [showOpsCostModal, setShowOpsCostModal] = useState(false);
 
   async function loadCategories() {
@@ -74,10 +81,10 @@ export default function AdminProductsPage() {
           </button>
           <button
             type="button"
-            onClick={() => setShowCategoryModal(true)}
+            onClick={() => setShowManageCategoriesModal(true)}
             className="btn-outline"
           >
-            + Kategori Baru
+            Kelola Kategori
           </button>
           <Link href="/admin/products/new" className="btn-primary">+ Tambah Produk</Link>
         </div>
@@ -98,7 +105,9 @@ export default function AdminProductsPage() {
         >
           <option value="">Semua kategori</option>
           {categories.map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
+            <option key={c.id} value={c.id}>
+              {c.name}{pct(c) > 0 ? ` (${pct(c)}% ops)` : ''}
+            </option>
           ))}
         </select>
         {(search || categoryFilter !== '') && (
@@ -135,7 +144,7 @@ export default function AdminProductsPage() {
               </td></tr>
             )}
             {products.map((p) => {
-              const pct = p.price > 0
+              const opsPct = p.price > 0
                 ? ((p.operational_cost / p.price) * 100).toFixed(1)
                 : null;
               return (
@@ -145,7 +154,7 @@ export default function AdminProductsPage() {
                   <td className="px-3 py-2 text-right">{formatRupiah(p.price)}</td>
                   <td className="px-3 py-2 text-right">
                     <div>{formatRupiah(p.operational_cost)}</div>
-                    {pct && <div className="text-[10px] text-gray-500">{pct}%</div>}
+                    {opsPct && <div className="text-[10px] text-gray-500">{opsPct}%</div>}
                   </td>
                   <td className="px-3 py-2 text-right">{p.stock}</td>
                   <td className="px-3 py-2">
@@ -164,10 +173,11 @@ export default function AdminProductsPage() {
         </table>
       </div>
 
-      {showCategoryModal && (
-        <CategoryModal
-          onClose={() => setShowCategoryModal(false)}
-          onSaved={() => { loadCategories(); }}
+      {showManageCategoriesModal && (
+        <ManageCategoriesModal
+          categories={categories}
+          onClose={() => setShowManageCategoriesModal(false)}
+          onChanged={() => { loadCategories(); loadProducts(); }}
         />
       )}
 
@@ -176,77 +186,252 @@ export default function AdminProductsPage() {
           categories={categories}
           activeCategoryId={categoryFilter || null}
           onClose={() => setShowOpsCostModal(false)}
-          onApplied={() => { loadProducts(); }}
+          onApplied={() => { loadProducts(); loadCategories(); }}
         />
       )}
     </div>
   );
 }
 
-/* --------------------- Modal: Tambah Kategori --------------------- */
+/* --------------------- Modal: Kelola Kategori --------------------- */
 
-function CategoryModal({
-  onClose, onSaved,
-}: { onClose: () => void; onSaved: () => void }) {
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [busy, setBusy] = useState(false);
+function ManageCategoriesModal({
+  categories, onClose, onChanged,
+}: {
+  categories: Category[];
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [editing, setEditing] = useState<Record<number, { name: string; percent: string }>>({});
+  const [busyId, setBusyId] = useState<number | null>(null);
 
-  async function submit(e: React.FormEvent) {
+  // Form state for adding a new category at top of the modal.
+  const [newName, setNewName] = useState('');
+  const [newPercent, setNewPercent] = useState('8');
+  const [newDesc, setNewDesc] = useState('');
+  const [busyAdd, setBusyAdd] = useState(false);
+
+  function startEdit(c: Category) {
+    setEditing((prev) => ({
+      ...prev,
+      [c.id]: { name: c.name, percent: String(pct(c)) },
+    }));
+  }
+  function cancelEdit(id: number) {
+    setEditing((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }
+
+  async function saveEdit(c: Category) {
+    const e = editing[c.id];
+    if (!e || !e.name.trim()) return;
+    const p = Number(e.percent);
+    if (Number.isNaN(p) || p < 0 || p > 100) {
+      toast.error('Persen harus 0–100');
+      return;
+    }
+    setBusyId(c.id);
+    try {
+      await api.put(`/admin/categories/${c.id}`, {
+        name: e.name.trim(),
+        operational_cost_percent: p,
+      });
+      toast.success('Kategori diperbarui');
+      cancelEdit(c.id);
+      onChanged();
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally { setBusyId(null); }
+  }
+
+  async function remove(c: Category) {
+    const used = c.products_count ?? 0;
+    const msg = used > 0
+      ? `Hapus kategori "${c.name}"?\n\n${used} produk akan dilepas dari kategori ini (tidak dihapus, hanya jadi tanpa kategori).`
+      : `Hapus kategori "${c.name}"?`;
+    if (!confirm(msg)) return;
+    setBusyId(c.id);
+    try {
+      await api.delete(`/admin/categories/${c.id}`);
+      toast.success('Kategori dihapus');
+      onChanged();
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally { setBusyId(null); }
+  }
+
+  async function addNew(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim()) return;
-    setBusy(true);
+    if (!newName.trim()) return;
+    const p = Number(newPercent);
+    if (Number.isNaN(p) || p < 0 || p > 100) {
+      toast.error('Persen harus 0–100');
+      return;
+    }
+    setBusyAdd(true);
     try {
       await api.post('/admin/categories', {
-        name: name.trim(),
-        description: description.trim() || null,
+        name: newName.trim(),
+        description: newDesc.trim() || null,
+        operational_cost_percent: p,
       });
       toast.success('Kategori ditambahkan');
-      onSaved();
-      onClose();
-    } catch (e) {
-      toast.error(apiError(e));
-    } finally { setBusy(false); }
+      setNewName(''); setNewDesc(''); setNewPercent('8');
+      onChanged();
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally { setBusyAdd(false); }
   }
 
   return (
-    <ModalShell title="Tambah Kategori Baru" onClose={onClose}>
-      <form onSubmit={submit} className="space-y-3">
-        <div>
-          <label className="label">Nama kategori</label>
+    <ModalShell title="Kelola Kategori Produk" onClose={onClose} size="lg">
+      <p className="text-sm text-gray-600 mb-3">
+        Persen biaya ops di sini adalah <b>nilai default</b> untuk produk baru di
+        kategori tersebut. Saat membuat / mengedit produk, biaya operasional
+        dihitung otomatis = harga &times; persen kategori.
+      </p>
+
+      {/* Add new */}
+      <form onSubmit={addNew} className="card p-3 space-y-2 mb-4">
+        <div className="font-semibold text-sm">+ Tambah Kategori Baru</div>
+        <div className="grid sm:grid-cols-3 gap-2">
           <input
             className="input"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            autoFocus
-            required
+            placeholder="Nama kategori"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
             maxLength={120}
-            placeholder="cth: Stir & Kemudi"
+            required
           />
-        </div>
-        <div>
-          <label className="label">Deskripsi (opsional)</label>
-          <textarea
-            className="input min-h-[60px]"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            maxLength={500}
-          />
-        </div>
-        <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn-outline" onClick={onClose} disabled={busy}>
-            Batal
+          <div className="flex items-center gap-1">
+            <input
+              type="number"
+              step="0.1"
+              min="0"
+              max="100"
+              className="input"
+              placeholder="0"
+              value={newPercent}
+              onChange={(e) => setNewPercent(e.target.value)}
+              required
+            />
+            <span className="text-sm text-gray-600">%</span>
+          </div>
+          <button
+            type="submit"
+            className="btn-primary disabled:opacity-50"
+            disabled={busyAdd || !newName.trim()}
+          >
+            {busyAdd ? 'Menyimpan...' : 'Tambah'}
           </button>
-          <button type="submit" className="btn-primary disabled:opacity-50" disabled={busy || !name.trim()}>
-            {busy ? 'Menyimpan...' : 'Simpan'}
-          </button>
         </div>
+        <input
+          className="input"
+          placeholder="Deskripsi (opsional)"
+          value={newDesc}
+          onChange={(e) => setNewDesc(e.target.value)}
+          maxLength={500}
+        />
       </form>
+
+      {/* Existing list */}
+      <div className="border rounded-lg divide-y divide-gray-100 max-h-[50vh] overflow-y-auto">
+        {categories.length === 0 && (
+          <div className="p-6 text-center text-sm text-gray-500">Belum ada kategori.</div>
+        )}
+        {categories.map((c) => {
+          const isEditing = !!editing[c.id];
+          const draft = editing[c.id] ?? { name: c.name, percent: String(pct(c)) };
+          return (
+            <div key={c.id} className="p-3 flex flex-wrap items-center gap-3">
+              <div className="min-w-0 flex-1">
+                {isEditing ? (
+                  <div className="grid sm:grid-cols-2 gap-2">
+                    <input
+                      className="input"
+                      value={draft.name}
+                      onChange={(e) => setEditing((p) => ({ ...p, [c.id]: { ...draft, name: e.target.value } }))}
+                      maxLength={120}
+                    />
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        max="100"
+                        className="input"
+                        value={draft.percent}
+                        onChange={(e) => setEditing((p) => ({ ...p, [c.id]: { ...draft, percent: e.target.value } }))}
+                      />
+                      <span className="text-sm text-gray-600">%</span>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="font-medium">{c.name}</div>
+                    <div className="text-xs text-gray-500">
+                      {pct(c) > 0 ? `${pct(c)}% biaya ops` : 'Tanpa persen biaya ops'}
+                      {typeof c.products_count === 'number' && (
+                        <> · {c.products_count} produk</>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+              <div className="flex gap-1 shrink-0">
+                {isEditing ? (
+                  <>
+                    <button
+                      type="button"
+                      className="btn-primary text-xs disabled:opacity-50"
+                      onClick={() => saveEdit(c)}
+                      disabled={busyId === c.id}
+                    >
+                      {busyId === c.id ? '...' : 'Simpan'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost text-xs"
+                      onClick={() => cancelEdit(c.id)}
+                      disabled={busyId === c.id}
+                    >
+                      Batal
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button type="button" className="btn-outline text-xs" onClick={() => startEdit(c)}>
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-outline text-xs text-red-600 border-red-300"
+                      onClick={() => remove(c)}
+                      disabled={busyId === c.id}
+                    >
+                      Hapus
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex justify-end mt-4">
+        <button type="button" className="btn-outline" onClick={onClose}>
+          Tutup
+        </button>
+      </div>
     </ModalShell>
   );
 }
 
-/* --------------------- Modal: Atur Biaya Operasional % --------------------- */
+/* --------------------- Modal: Atur Biaya Operasional % (massal) --------------------- */
 
 function OpsCostModal({
   categories, activeCategoryId, onClose, onApplied,
@@ -261,6 +446,7 @@ function OpsCostModal({
     activeCategoryId ? 'category' : 'all',
   );
   const [categoryId, setCategoryId] = useState<number | ''>(activeCategoryId ?? '');
+  const [alsoSetCategoryDefault, setAlsoSetCategoryDefault] = useState(true);
   const [busy, setBusy] = useState(false);
 
   async function submit(e: React.FormEvent) {
@@ -286,6 +472,25 @@ function OpsCostModal({
         body.category_id = categoryId;
       }
       const r = await api.post('/admin/products/bulk-operational-cost', body);
+
+      // If the user is targeting one specific category and asked to also save
+      // the percent as that category's default, update the category too so
+      // future products inherit the same percent automatically.
+      if (
+        scope === 'category'
+        && categoryId
+        && alsoSetCategoryDefault
+      ) {
+        const c = categories.find((x) => x.id === categoryId);
+        if (c) {
+          await api.put(`/admin/categories/${c.id}`, {
+            name: c.name,
+            description: c.description ?? null,
+            operational_cost_percent: p,
+          });
+        }
+      }
+
       toast.success(`${r.data.updated} produk diperbarui (${p}%)`);
       onApplied();
       onClose();
@@ -294,7 +499,6 @@ function OpsCostModal({
     } finally { setBusy(false); }
   }
 
-  // Live preview against a sample price (Rp 100.000) for the user's intuition.
   const preview = (() => {
     const p = Number(percent);
     if (Number.isNaN(p)) return null;
@@ -343,7 +547,7 @@ function OpsCostModal({
                 checked={scope === 'all'}
                 onChange={() => setScope('all')}
               />
-              Semua produk ({/* count is unknown here without a separate call */}seluruh katalog)
+              Semua produk (seluruh katalog)
             </label>
             <label className="flex items-center gap-2 text-sm">
               <input
@@ -355,24 +559,38 @@ function OpsCostModal({
               Hanya kategori tertentu
             </label>
             {scope === 'category' && (
-              <select
-                className="input"
-                value={String(categoryId)}
-                onChange={(e) => setCategoryId(e.target.value === '' ? '' : Number(e.target.value))}
-                required
-              >
-                <option value="">-- pilih kategori --</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
+              <>
+                <select
+                  className="input"
+                  value={String(categoryId)}
+                  onChange={(e) => setCategoryId(e.target.value === '' ? '' : Number(e.target.value))}
+                  required
+                >
+                  <option value="">-- pilih kategori --</option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}{pct(c) > 0 ? ` (saat ini ${pct(c)}%)` : ''}
+                    </option>
+                  ))}
+                </select>
+                <label className="flex items-center gap-2 text-xs text-gray-600">
+                  <input
+                    type="checkbox"
+                    checked={alsoSetCategoryDefault}
+                    onChange={(e) => setAlsoSetCategoryDefault(e.target.checked)}
+                  />
+                  Sekaligus jadikan {percent || '0'}% sebagai default kategori ini
+                  (produk baru pakai persen ini juga)
+                </label>
+              </>
             )}
           </div>
         </div>
 
         <div className="text-xs text-gray-500 bg-yellow-50 border border-yellow-200 rounded p-2">
           Aksi ini menimpa kolom <code>operational_cost</code> pada produk yang
-          ke-match. Untuk override per-produk setelahnya, edit produk masing-masing.
+          ke-match. Untuk override per-produk setelahnya, edit produk masing-masing
+          dan klik &ldquo;Atur manual&rdquo;.
         </div>
 
         <div className="flex justify-end gap-2 pt-1">
@@ -395,15 +613,20 @@ function OpsCostModal({
 /* --------------------- Modal shell (no extra deps) --------------------- */
 
 function ModalShell({
-  title, onClose, children,
-}: { title: string; onClose: () => void; children: React.ReactNode }) {
+  title, onClose, children, size = 'md',
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+  size?: 'md' | 'lg';
+}) {
   return (
     <div
       className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-xl shadow-xl w-full max-w-md p-5"
+        className={`bg-white rounded-xl shadow-xl w-full ${size === 'lg' ? 'max-w-2xl' : 'max-w-md'} p-5`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-3">

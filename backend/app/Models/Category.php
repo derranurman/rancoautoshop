@@ -10,7 +10,19 @@ class Category extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['name', 'slug', 'description'];
+    protected $fillable = [
+        'name',
+        'slug',
+        'description',
+        'operational_cost_percent',
+    ];
+
+    protected function casts(): array
+    {
+        return [
+            'operational_cost_percent' => 'decimal:2',
+        ];
+    }
 
     public function products(): HasMany
     {

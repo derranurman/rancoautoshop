@@ -15,6 +15,10 @@ export interface Category {
   name: string;
   slug: string;
   description?: string | null;
+  /** Default biaya operasional sebagai persen dari harga produk (admin-only). */
+  operational_cost_percent?: number | string | null;
+  /** Hitungan jumlah produk di kategori ini (admin endpoint). */
+  products_count?: number;
 }
 
 export interface Address {

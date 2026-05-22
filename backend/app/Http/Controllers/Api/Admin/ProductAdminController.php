@@ -74,6 +74,7 @@ class ProductAdminController extends Controller
     {
         $data = $this->validated($request);
         $data['slug'] = $this->uniqueSlug($data['name']);
+        $data['operational_cost'] = $this->resolveOperationalCost($data, null);
         $product = Product::create($data);
         return response()->json(['data' => $product], 201);
     }
@@ -89,6 +90,7 @@ class ProductAdminController extends Controller
         if (isset($data['name']) && $data['name'] !== $product->name) {
             $data['slug'] = $this->uniqueSlug($data['name'], $product->id);
         }
+        $data['operational_cost'] = $this->resolveOperationalCost($data, $product);
 
         // Best-effort cleanup: delete files for images that were dropped.
         if (array_key_exists('images', $data)) {
@@ -152,6 +154,42 @@ class ProductAdminController extends Controller
             'images.*'         => ['string'], // either /storage/... path or full URL
             'is_active'        => ['boolean'],
         ]);
+    }
+
+    /**
+     * Decide what operational_cost to persist for a product.
+     *
+     * Behaviour:
+     *  - If the request explicitly sent an `operational_cost` value (even 0),
+     *    use it as-is — that's the admin's manual override.
+     *  - If the field is missing/null, auto-compute from the chosen category's
+     *    `operational_cost_percent`:
+     *        operational_cost = round(price * percent / 100)
+     *  - If no category is set or its percent is 0, falls back to 0 on create
+     *    or keeps the existing value on update.
+     *
+     * The admin's intent ("auto" vs "manual") is conveyed by simply omitting
+     * the field in the request body, so the API doesn't need a separate flag.
+     */
+    protected function resolveOperationalCost(array $data, ?Product $existing): int
+    {
+        // Admin sent an explicit number → manual override, respect it.
+        if (array_key_exists('operational_cost', $data) && $data['operational_cost'] !== null) {
+            return (int) $data['operational_cost'];
+        }
+
+        // Auto from category percent, if any.
+        $price = (int) ($data['price'] ?? $existing?->price ?? 0);
+        $categoryId = $data['category_id'] ?? $existing?->category_id ?? null;
+        if ($categoryId) {
+            $cat = \App\Models\Category::find($categoryId);
+            if ($cat && (float) $cat->operational_cost_percent > 0) {
+                return (int) round($price * ((float) $cat->operational_cost_percent) / 100);
+            }
+        }
+
+        // No useful info — keep existing on update, default 0 on create.
+        return (int) ($existing?->operational_cost ?? 0);
     }
 
     protected function uniqueSlug(string $name, ?int $ignoreId = null): string
