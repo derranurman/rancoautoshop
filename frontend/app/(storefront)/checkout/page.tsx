@@ -84,10 +84,18 @@ export default function CheckoutPage() {
     setChosenCost(null);
   }, [provinceId]);
 
-  // Auto-pick the default address (or first one) the first time we get the list.
-  // When an address is auto-applied we keep the form collapsed.
+  // First-time auto-pick. Runs only ONCE: when BOTH the saved-addresses list
+  // AND the provinces list have been loaded. This avoids a race where the
+  // addresses list arrived first, applyAddress() matched against an empty
+  // provinces array, and provinceId stayed blank — which made "Cek Ongkir"
+  // permanently disabled even though an address was clearly chosen.
+  const autoAppliedRef = useRef(false);
   useEffect(() => {
-    if (selectedAddrId !== 'new') return;
+    if (autoAppliedRef.current) return;
+    if (provincesLoading) return;
+    if (provinces.length === 0) return;
+
+    autoAppliedRef.current = true;
     if (addresses.length === 0) {
       // No saved addresses → user has to fill the form by hand.
       setEditing(true);
@@ -97,7 +105,7 @@ export default function CheckoutPage() {
     applyAddress(def);
     setSelectedAddrId(def.id);
     setEditing(false);
-  }, [addresses]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [addresses, provinces, provincesLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function applyAddress(a: Address) {
     setRecipient({ name: a.recipient_name, phone: a.phone, address: a.address_line });
@@ -241,6 +249,14 @@ export default function CheckoutPage() {
     ? addresses.find((a) => a.id === selectedAddrId) ?? null
     : null;
 
+  // Helper note shown when shipping cost can't be calculated yet.
+  const cekOngkirHint =
+    !cityId
+      ? (selectedAddr && !editing
+          ? 'Klik "Ubah" untuk memilih kota tujuan'
+          : 'Pilih kota tujuan dulu')
+      : null;
+
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 grid md:grid-cols-3 gap-4">
       <div className="md:col-span-2 space-y-4">
@@ -291,6 +307,16 @@ export default function CheckoutPage() {
                     {selectedAddr.city}, {selectedAddr.province}
                     {selectedAddr.postal_code ? ` ${selectedAddr.postal_code}` : ''}
                   </div>
+                  {/* Surface a clear hint if we couldn't auto-resolve the city to
+                      a RajaOngkir id — e.g. when the saved city name doesn't
+                      match any city we know about. Without this, "Cek Ongkir"
+                      stays disabled silently. */}
+                  {!cityId && (
+                    <div className="mt-2 text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded px-2 py-1">
+                      Kota tujuan belum bisa otomatis dideteksi.
+                      Klik <b>Ubah</b> dan pilih kota dari daftar agar ongkir bisa dihitung.
+                    </div>
+                  )}
                 </div>
                 <div className="shrink-0 flex flex-col gap-1 items-stretch">
                   <button
@@ -423,8 +449,14 @@ export default function CheckoutPage() {
               <button key={c} onClick={() => setCourier(c)}
                 className={`btn ${courier === c ? 'bg-ink text-white' : 'bg-gray-100'}`}>{c.toUpperCase()}</button>
             ))}
-            <button onClick={calcCost} disabled={!cityId} className="btn-primary ml-auto">Cek Ongkir</button>
+            <button onClick={calcCost} disabled={!cityId} className="btn-primary ml-auto"
+                    title={cekOngkirHint ?? undefined}>
+              Cek Ongkir
+            </button>
           </div>
+          {cekOngkirHint && (
+            <div className="text-xs text-gray-500 mb-2">{cekOngkirHint}.</div>
+          )}
           <div className="space-y-2">
             {costs.map((c, i) => (
               <label key={i} className={`card p-3 flex justify-between cursor-pointer ${chosenCost?.service === c.service ? 'border-brand' : ''}`}>
