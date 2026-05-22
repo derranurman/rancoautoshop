@@ -74,6 +74,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::apiResource('categories',     CategoryAdminController::class)->except(['show']);
         Route::post('/products/upload-image', [ProductAdminController::class, 'uploadImage']);
+        Route::post('/products/bulk-operational-cost', [ProductAdminController::class, 'bulkOperationalCost']);
         Route::apiResource('products',       ProductAdminController::class);
         Route::apiResource('vouchers',       VoucherAdminController::class)->except(['show']);
 

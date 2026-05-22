@@ -17,7 +17,57 @@ class ProductAdminController extends Controller
         if ($s = $request->string('search')->trim()->value()) {
             $q->where('name', 'like', "%{$s}%");
         }
+        if ($categoryId = $request->integer('category_id')) {
+            $q->where('category_id', $categoryId);
+        }
         return response()->json($q->latest()->paginate($request->integer('per_page', 20)));
+    }
+
+    /**
+     * Bulk-set operational_cost as a percentage of each product's price.
+     *
+     * Body:
+     *   percent     : float (0..100) — e.g. 8 means 8% of price
+     *   category_id : optional int — limit to a single category
+     *   product_ids : optional int[] — limit to a specific subset
+     *
+     * If neither category_id nor product_ids is provided, applies to ALL
+     * products. Returns the number of rows updated. Each product gets
+     * operational_cost = round(price * percent / 100).
+     */
+    public function bulkOperationalCost(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'percent'       => ['required', 'numeric', 'min:0', 'max:100'],
+            'category_id'   => ['nullable', 'integer', 'exists:categories,id'],
+            'product_ids'   => ['nullable', 'array'],
+            'product_ids.*' => ['integer', 'exists:products,id'],
+        ]);
+
+        $q = Product::query();
+        if (! empty($data['category_id'])) {
+            $q->where('category_id', $data['category_id']);
+        }
+        if (! empty($data['product_ids'])) {
+            $q->whereIn('id', $data['product_ids']);
+        }
+
+        $percent = (float) $data['percent'];
+        $updated = 0;
+
+        // Loop through one-by-one so the calculation is per-product (price varies).
+        $q->chunkById(200, function ($products) use ($percent, &$updated) {
+            foreach ($products as $p) {
+                $p->operational_cost = (int) round($p->price * $percent / 100);
+                $p->save();
+                $updated++;
+            }
+        });
+
+        return response()->json([
+            'updated' => $updated,
+            'percent' => $percent,
+        ]);
     }
 
     public function store(Request $request): JsonResponse
