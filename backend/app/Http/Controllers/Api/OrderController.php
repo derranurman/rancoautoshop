@@ -178,6 +178,13 @@ class OrderController extends Controller
      * Re-issue (or return existing) Midtrans Snap token so the customer can
      * resume payment from the order detail page if they closed the popup or
      * came back later. Only works while the order is still pending.
+     *
+     * IMPORTANT: Midtrans rejects reuse of `transaction_details.order_id`
+     * once a Snap session has been opened for it (HTTP 400
+     * "transaction_details.order_id has already been taken"). To avoid that
+     * we rotate `midtrans_order_id` on every retry by appending a short
+     * suffix (e.g. RANCO-ABCDE12345-RXYZ1). The customer-facing
+     * `order_number` stays stable; only the Midtrans-side reference changes.
      */
     public function repay(Request $request, string $orderNumber, MidtransService $mt): JsonResponse
     {
@@ -188,12 +195,15 @@ class OrderController extends Controller
 
         abort_if($order->status !== Order::STATUS_PENDING, 422, 'Pesanan ini tidak bisa dibayar lagi.');
 
-        // Always request a fresh token; old ones may have expired (Snap tokens
-        // last ~24h on sandbox). The Midtrans service handles the dev mock.
+        // Always rotate the Midtrans order id before requesting a new token,
+        // so that any prior Snap session under the old id no longer blocks
+        // us. Order number stays unchanged for the customer.
+        $order->midtrans_order_id = $order->order_number . '-R' . strtoupper(Str::random(4));
+        $order->save();
+
         $snap = $mt->createSnapToken($order);
         $order->update([
             'midtrans_snap_token' => $snap['token'] ?? null,
-            'midtrans_order_id'   => $order->order_number,
         ]);
 
         return response()->json([

@@ -45,9 +45,15 @@ class MidtransService
      */
     public function createSnapToken(Order $order): array
     {
+        // Use the per-attempt midtrans_order_id when available so that
+        // re-issuing a Snap token (e.g. customer closed the popup and clicks
+        // "Bayar Sekarang" again) does NOT collide with the previous
+        // transaction. Midtrans rejects reuse of transaction_details.order_id
+        // with: "transaction_details.order_id has already been taken".
+        // Fallback to the canonical order_number on the very first call.
         $payload = [
             'transaction_details' => [
-                'order_id'     => $order->order_number,
+                'order_id'     => $order->midtrans_order_id ?: $order->order_number,
                 'gross_amount' => $order->total,
             ],
             'customer_details' => [

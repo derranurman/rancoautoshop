@@ -29,7 +29,22 @@ class PaymentController extends Controller
         $status      = $payload['transaction_status'] ?? null;
         $fraud       = $payload['fraud_status'] ?? null;
 
-        $order = Order::where('order_number', $orderNumber)->first();
+        // Match by the Midtrans-side reference first (which we rotate on each
+        // retry, e.g. "RANCO-ABCDE12345-RXYZ1"), then fall back to the
+        // canonical order_number — and finally strip any "-R...." retry
+        // suffix so a webhook arriving for an older Snap session still
+        // resolves to the right order.
+        $order = Order::where('midtrans_order_id', $orderNumber)
+            ->orWhere('order_number', $orderNumber)
+            ->first();
+
+        if (! $order && is_string($orderNumber)) {
+            $stripped = preg_replace('/-R[A-Z0-9]+$/i', '', $orderNumber);
+            if ($stripped !== $orderNumber) {
+                $order = Order::where('order_number', $stripped)->first();
+            }
+        }
+
         if (! $order) {
             return response()->json(['message' => 'order not found'], 404);
         }
