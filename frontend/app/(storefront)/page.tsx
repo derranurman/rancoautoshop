@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import type { Category, Product } from '@/lib/types';
 import ProductCard from '@/components/ProductCard';
+import { useSiteSettings } from '@/lib/stores';
 
 export default function HomePage() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -11,6 +12,7 @@ export default function HomePage() {
   const [activeCat, setActiveCat] = useState<string>('');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const settings = useSiteSettings((s) => s.settings);
 
   useEffect(() => {
     api.get('/categories').then((r) => setCats(r.data.data));
@@ -26,15 +28,29 @@ export default function HomePage() {
       .finally(() => setLoading(false));
   }, [activeCat, search]);
 
+  // Inline style override: kalau admin set warna gradient hero, pakai itu.
+  // Kalau salah satu null, fallback ke kelas Tailwind brand default.
+  const heroStyle =
+    settings.hero_gradient_from && settings.hero_gradient_to
+      ? {
+          backgroundImage: `linear-gradient(to bottom right, ${settings.hero_gradient_from}, ${settings.hero_gradient_to})`,
+        }
+      : undefined;
+  const heroFallbackClass =
+    !heroStyle ? 'bg-gradient-to-br from-brand to-brand-700' : '';
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
-      <section className="rounded-2xl bg-gradient-to-br from-brand to-brand-700 text-white p-8 mb-6">
-        <h1 className="text-3xl md:text-4xl font-bold">Ranco Autoshop</h1>
-        <p className="mt-2 opacity-90">Aksesoris, sparepart, & perlengkapan mobil dengan harga bersahabat.</p>
+      <section
+        className={`rounded-2xl ${heroFallbackClass} text-white p-8 mb-6`}
+        style={heroStyle}
+      >
+        <h1 className="text-3xl md:text-4xl font-bold">{settings.hero_title}</h1>
+        <p className="mt-2 opacity-90">{settings.hero_subtitle}</p>
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Cari produk... misal: stir skeleton, velg, oli"
+          placeholder={settings.hero_search_placeholder}
           className="mt-5 input text-gray-900 max-w-lg"
         />
       </section>

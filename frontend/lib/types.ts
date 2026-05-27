@@ -122,3 +122,32 @@ export interface Order {
   /** Always-present timeline (server-side synthesizes when no rows exist). */
   timeline?: OrderTrackingEvent[];
 }
+
+/**
+ * Konfigurasi tampilan storefront (diatur dari menu admin "Tampilan").
+ * Dipakai oleh Navbar, hero, footer, dan widget WhatsApp.
+ */
+export interface SiteSettings {
+  app_name: string;
+  logo_url: string | null;
+  favicon_url: string | null;
+  hero_title: string;
+  hero_subtitle: string;
+  hero_search_placeholder: string;
+  hero_gradient_from: string | null;
+  hero_gradient_to: string | null;
+  footer_text: string | null;
+  whatsapp_enabled: boolean;
+  whatsapp_number: string | null;       // versi normalized (62...) untuk wa.me
+  whatsapp_label: string;
+  whatsapp_greeting: string;
+  whatsapp_prefilled_text: string;
+  whatsapp_link: string | null;         // siap-pakai href ke wa.me
+}
+
+/** Versi raw (mentah, tanpa normalisasi) yang dipakai admin form. */
+export interface SiteSettingsAdmin extends Omit<SiteSettings, 'whatsapp_number' | 'whatsapp_link'> {
+  whatsapp_number: string | null;            // input mentah admin
+  whatsapp_number_normalized: string | null; // hasil normalisasi (read-only preview)
+  whatsapp_link: string | null;
+}

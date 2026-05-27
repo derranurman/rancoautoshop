@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 import { api, getToken, setToken, RequestWithKind } from './api';
-import type { Cart, User } from './types';
+import type { Cart, SiteSettings, User } from './types';
 
 interface AuthState {
   user: User | null;
@@ -116,5 +116,84 @@ export const useCart = create<CartState>((set) => ({
   async clear() {
     const res = await api.delete('/cart');
     set({ cart: res.data });
+  },
+}));
+
+
+
+/**
+ * Default tampilan kalau API belum sempat menjawab. Disinkronkan dengan
+ * default kolom di migration `create_site_settings_table` supaya UI tidak
+ * berubah saat first-load.
+ */
+const DEFAULT_SETTINGS: SiteSettings = {
+  app_name: 'Ranco Autoshop',
+  logo_url: null,
+  favicon_url: null,
+  hero_title: 'Ranco Autoshop',
+  hero_subtitle: 'Aksesoris, sparepart, & perlengkapan mobil dengan harga bersahabat.',
+  hero_search_placeholder: 'Cari produk... misal: stir skeleton, velg, oli',
+  hero_gradient_from: null,
+  hero_gradient_to: null,
+  footer_text: null,
+  whatsapp_enabled: false,
+  whatsapp_number: null,
+  whatsapp_label: 'Chat Admin Ranco',
+  whatsapp_greeting: 'Halo! Ada yang bisa kami bantu seputar produk Ranco Autoshop?',
+  whatsapp_prefilled_text: 'Halo Admin Ranco, saya ingin bertanya tentang produk.',
+  whatsapp_link: null,
+};
+
+const SETTINGS_CACHE_KEY = 'ranco.siteSettings';
+
+interface SiteSettingsState {
+  settings: SiteSettings;
+  loaded: boolean;
+  /**
+   * Memuat pengaturan dari API. Akan langsung memakai nilai dari
+   * localStorage (kalau ada) supaya UI tidak FOUC, lalu refresh di latar
+   * belakang ke server. Aman dipanggil berkali-kali — request keduanya akan
+   * di-skip kalau sudah loaded di session ini.
+   */
+  load: (force?: boolean) => Promise<void>;
+  /** Replace settings di-state (dipakai admin setelah berhasil simpan). */
+  replace: (s: SiteSettings) => void;
+}
+
+export const useSiteSettings = create<SiteSettingsState>((set, get) => ({
+  settings: (() => {
+    if (typeof window === 'undefined') return DEFAULT_SETTINGS;
+    try {
+      const raw = localStorage.getItem(SETTINGS_CACHE_KEY);
+      if (raw) return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as SiteSettings) };
+    } catch { /* ignore parse errors, fallback to defaults */ }
+    return DEFAULT_SETTINGS;
+  })(),
+  loaded: false,
+  async load(force = false) {
+    if (!force && get().loaded) return;
+    try {
+      const r = await api.get('/site-settings');
+      const data = (r.data?.data ?? null) as SiteSettings | null;
+      if (data) {
+        const next = { ...DEFAULT_SETTINGS, ...data };
+        set({ settings: next, loaded: true });
+        if (typeof window !== 'undefined') {
+          try { localStorage.setItem(SETTINGS_CACHE_KEY, JSON.stringify(next)); } catch { /* quota? */ }
+        }
+      } else {
+        set({ loaded: true });
+      }
+    } catch {
+      // Jaringan gagal? UI tetap pakai cache / default.
+      set({ loaded: true });
+    }
+  },
+  replace(s) {
+    const next = { ...DEFAULT_SETTINGS, ...s };
+    set({ settings: next, loaded: true });
+    if (typeof window !== 'undefined') {
+      try { localStorage.setItem(SETTINGS_CACHE_KEY, JSON.stringify(next)); } catch { /* quota? */ }
+    }
   },
 }));
