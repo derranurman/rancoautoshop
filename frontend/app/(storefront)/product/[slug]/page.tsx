@@ -36,6 +36,22 @@ export default function ProductDetailPage() {
     }
   }
 
+  /**
+   * Beli sekarang: tambahkan ke keranjang lalu langsung loncat ke halaman
+   * checkout. Biar pembeli yang sudah yakin tidak perlu mampir ke keranjang
+   * dulu.
+   */
+  async function onBuyNow() {
+    if (!user) { router.push('/login'); return; }
+    if (!product) return;
+    try {
+      await add(product.id, qty);
+      router.push('/checkout');
+    } catch (e) {
+      toast.error(apiError(e));
+    }
+  }
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 grid md:grid-cols-2 gap-6">
       <div>
@@ -68,8 +84,11 @@ export default function ProductDetailPage() {
             <span className="w-10 text-center">{qty}</span>
             <button className="btn-outline" onClick={() => setQty(Math.min(product.stock, qty + 1))}>+</button>
           </div>
-          <button onClick={onAddToCart} disabled={product.stock === 0} className="btn-primary flex-1">
+          <button onClick={onAddToCart} disabled={product.stock === 0} className="btn-outline flex-1">
             {product.stock === 0 ? 'Stok Habis' : 'Masukkan Keranjang'}
+          </button>
+          <button onClick={onBuyNow} disabled={product.stock === 0} className="btn-primary flex-1">
+            Beli Sekarang
           </button>
         </div>
       </div>

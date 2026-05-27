@@ -84,7 +84,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/orders/{order}/tracking', [OrderAdminController::class, 'addTrackingEvent']);
 
         Route::get('/users',                 [UserAdminController::class, 'index']);
+        Route::post('/users',                [UserAdminController::class, 'store']);
         Route::get('/users/{user}',          [UserAdminController::class, 'show']);
+        Route::patch('/users/{user}',        [UserAdminController::class, 'update']);
+        Route::delete('/users/{user}',       [UserAdminController::class, 'destroy']);
         Route::patch('/users/{user}/toggle-suspend', [UserAdminController::class, 'toggleSuspend']);
     });
 });
