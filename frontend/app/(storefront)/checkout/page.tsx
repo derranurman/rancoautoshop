@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
 import { api, apiError, formatRupiah } from '@/lib/api';
@@ -14,10 +14,40 @@ type Province = { province_id: string; province: string };
 type City = { city_id: string; province_id: string; type: string; city_name: string; postal_code: string };
 type Cost = { courier: string; service: string; description: string; cost: number; etd: string };
 
+/** Snapshot mini produk yang disimpan di sessionStorage untuk mode Beli Sekarang. */
+interface BuyNowItem {
+  product_id: number;
+  quantity: number;
+  _preview: {
+    name: string;
+    image: string | null;
+    unit_price: number;
+    weight: number;
+    stock: number;
+  };
+}
+
 export default function CheckoutPage() {
+  // useSearchParams() butuh Suspense boundary saat build (Next.js App Router).
+  return (
+    <Suspense fallback={<div className="max-w-4xl mx-auto px-4 py-10 text-gray-500">Memuat checkout...</div>}>
+      <CheckoutPageInner />
+    </Suspense>
+  );
+}
+
+function CheckoutPageInner() {
   const router = useRouter();
+  const search = useSearchParams();
   const { user, loading: authLoading } = useAuth();
   const { cart, fetch: fetchCart } = useCart();
+
+  // Mode Beli Sekarang: dipicu saat URL mengandung ?buy_now=1 dan ada item
+  // di sessionStorage. Dalam mode ini, halaman ini TIDAK memakai keranjang
+  // sama sekali — dia checkout single item dengan qty yang sudah dipilih
+  // pembeli di halaman detail produk.
+  const buyNowMode = search?.get('buy_now') === '1';
+  const [buyNow, setBuyNow] = useState<BuyNowItem | null>(null);
 
   const [recipient, setRecipient] = useState({ name: '', phone: '', address: '' });
   const [provinces, setProvinces] = useState<Province[]>([]);
@@ -44,6 +74,8 @@ export default function CheckoutPage() {
   useEffect(() => {
     if (!authLoading && !user) { router.replace('/login'); return; }
     if (user) {
+      // Cart tetap di-fetch supaya badge "Keranjang" di navbar tetap update.
+      // Angkanya tidak dipakai di halaman ini saat mode Beli Sekarang.
       fetchCart();
       api.get('/addresses')
         .then((r) => setAddresses(r.data.data ?? []))
@@ -55,6 +87,27 @@ export default function CheckoutPage() {
       .catch((e) => toast.error('Gagal memuat daftar provinsi: ' + apiError(e)))
       .finally(() => setProvincesLoading(false));
   }, [user, authLoading, fetchCart, router]);
+
+  // Muat snapshot Beli Sekarang dari sessionStorage. Kalau mode buy_now
+  // diaktifkan tapi tidak ada data, anggap kadaluarsa dan balik ke katalog.
+  useEffect(() => {
+    if (!buyNowMode) { setBuyNow(null); return; }
+    if (typeof window === 'undefined') return;
+    const raw = sessionStorage.getItem('ranco.buyNow');
+    if (!raw) {
+      toast.error('Sesi "Beli Sekarang" sudah berakhir. Silakan ulangi dari halaman produk.');
+      router.replace('/');
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw) as BuyNowItem;
+      if (!parsed?.product_id || !parsed?.quantity) throw new Error('invalid');
+      setBuyNow(parsed);
+    } catch {
+      sessionStorage.removeItem('ranco.buyNow');
+      router.replace('/');
+    }
+  }, [buyNowMode, router]);
 
   useEffect(() => {
     if (user) {
@@ -174,12 +227,23 @@ export default function CheckoutPage() {
     setEditing(false);
   }
 
+  // Subtotal & berat yang dipakai di halaman ini bergantung pada mode:
+  // - Beli Sekarang: dari snapshot produk single
+  // - Normal: dari keranjang user
+  const viewSubtotal = buyNow
+    ? buyNow._preview.unit_price * buyNow.quantity
+    : (cart?.subtotal ?? 0);
+  const viewWeight = buyNow
+    ? Math.max(1, buyNow._preview.weight * buyNow.quantity)
+    : (cart?.total_weight ?? 0);
+
   async function calcCost() {
-    if (!cityId || !cart) return;
+    if (!cityId) return;
+    if (!buyNow && !cart) return;
     try {
       const r = await api.post('/shipping/cost', {
         destination: cityId,
-        weight: Math.max(1, cart.total_weight),
+        weight: Math.max(1, viewWeight),
         courier,
       });
       setCosts(r.data.data); setChosenCost(null);
@@ -187,19 +251,20 @@ export default function CheckoutPage() {
   }
 
   async function applyVoucher() {
-    if (!voucherCode || !cart) { setDiscount(0); return; }
+    if (!voucherCode) { setDiscount(0); return; }
+    if (!buyNow && !cart) return;
     try {
-      const r = await api.post('/vouchers/check', { code: voucherCode, subtotal: cart.subtotal });
+      const r = await api.post('/vouchers/check', { code: voucherCode, subtotal: viewSubtotal });
       if (r.data.valid) { setDiscount(r.data.discount); toast.success('Voucher diterapkan'); }
       else { setDiscount(0); toast.error(r.data.message ?? 'Voucher tidak valid'); }
     } catch (e) { toast.error(apiError(e)); }
   }
 
   const total = useMemo(() => {
-    const s = cart?.subtotal ?? 0;
+    const s = viewSubtotal;
     const sh = chosenCost?.cost ?? 0;
     return Math.max(0, s - discount + sh);
-  }, [cart?.subtotal, chosenCost?.cost, discount]);
+  }, [viewSubtotal, chosenCost?.cost, discount]);
 
   async function onSubmit() {
     if (!chosenCost) { toast.error('Pilih layanan pengiriman dulu'); return; }
@@ -214,7 +279,7 @@ export default function CheckoutPage() {
 
     setSubmitting(true);
     try {
-      const r = await api.post('/orders/checkout', {
+      const payload: Record<string, unknown> = {
         recipient_name: recipient.name,
         recipient_phone: recipient.phone,
         shipping_address: addr,
@@ -222,7 +287,21 @@ export default function CheckoutPage() {
         courier_service: chosenCost.service,
         shipping_cost: chosenCost.cost,
         voucher_code: voucherCode || undefined,
-      });
+      };
+      // Mode Beli Sekarang: kirim payload buy_now supaya backend membuat
+      // order hanya dari produk ini, tanpa menyentuh keranjang user.
+      if (buyNow) {
+        payload.buy_now = {
+          product_id: buyNow.product_id,
+          quantity: buyNow.quantity,
+        };
+      }
+      const r = await api.post('/orders/checkout', payload);
+      // Bersihkan snapshot Beli Sekarang setelah order berhasil dibuat,
+      // supaya kalau user balik ke /checkout dia kembali ke flow keranjang.
+      if (buyNow && typeof window !== 'undefined') {
+        sessionStorage.removeItem('ranco.buyNow');
+      }
       toast.success('Pesanan dibuat');
       const orderNumber = r.data.order.order_number;
       const token = r.data.snap_token as string | null;
@@ -242,8 +321,14 @@ export default function CheckoutPage() {
     } finally { setSubmitting(false); }
   }
 
-  if (!cart) return <div className="max-w-4xl mx-auto px-4 py-10 text-gray-500">Memuat keranjang...</div>;
-  if (cart.items.length === 0) return <div className="max-w-4xl mx-auto px-4 py-10">Keranjang kosong.</div>;
+  // Loading & empty states. Dalam mode Beli Sekarang kita tidak butuh cart.
+  if (buyNowMode && !buyNow) {
+    return <div className="max-w-4xl mx-auto px-4 py-10 text-gray-500">Memuat data produk...</div>;
+  }
+  if (!buyNow) {
+    if (!cart) return <div className="max-w-4xl mx-auto px-4 py-10 text-gray-500">Memuat keranjang...</div>;
+    if (cart.items.length === 0) return <div className="max-w-4xl mx-auto px-4 py-10">Keranjang kosong.</div>;
+  }
 
   // The summary view of the currently-selected saved address (when not editing).
   const selectedAddr = typeof selectedAddrId === 'number'
@@ -261,6 +346,38 @@ export default function CheckoutPage() {
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 grid md:grid-cols-3 gap-4">
       <div className="md:col-span-2 space-y-4">
+        {buyNow && (
+          <div className="card p-3 border-brand/30 bg-brand/5 text-sm space-y-2">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="font-semibold text-brand">Mode Beli Sekarang</div>
+              <Link href="/cart" className="text-xs text-gray-500 hover:underline">
+                Batal & ke keranjang
+              </Link>
+            </div>
+            <div className="flex items-center gap-3">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={buyNow._preview.image ?? 'https://placehold.co/64x64/111827/ffffff?text=Ranco'}
+                alt={buyNow._preview.name}
+                className="h-14 w-14 rounded-md object-cover bg-gray-100 shrink-0"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="font-medium truncate">{buyNow._preview.name}</div>
+                <div className="text-xs text-gray-600">
+                  {buyNow.quantity} × {formatRupiah(buyNow._preview.unit_price)}
+                </div>
+              </div>
+              <div className="font-semibold whitespace-nowrap">
+                {formatRupiah(buyNow._preview.unit_price * buyNow.quantity)}
+              </div>
+            </div>
+            <div className="text-xs text-gray-500">
+              Pembelian ini terpisah dari keranjangmu — barang yang sudah di keranjang
+              tidak ikut ditagih.
+            </div>
+          </div>
+        )}
+
         {user && !user.phone && (
           <div className="card p-3 border-yellow-300 bg-yellow-50 text-sm flex items-center justify-between gap-2">
             <span className="text-yellow-800">
@@ -492,7 +609,7 @@ export default function CheckoutPage() {
 
       <div className="card p-4 h-fit sticky top-20 space-y-2">
         <h2 className="font-semibold">Ringkasan</h2>
-        <div className="flex justify-between text-sm"><span>Subtotal barang</span><span>{formatRupiah(cart.subtotal)}</span></div>
+        <div className="flex justify-between text-sm"><span>Subtotal barang</span><span>{formatRupiah(viewSubtotal)}</span></div>
         <div className="flex justify-between text-sm"><span>Diskon</span><span>- {formatRupiah(discount)}</span></div>
         <div className="flex justify-between text-sm"><span>Ongkir</span><span>{formatRupiah(chosenCost?.cost ?? 0)}</span></div>
         <div className="border-t border-gray-100 pt-2 flex justify-between font-bold">

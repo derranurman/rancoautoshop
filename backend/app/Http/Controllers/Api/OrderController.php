@@ -38,45 +38,74 @@ class OrderController extends Controller
 
     /**
      * Create order from current user's cart + snap token for payment.
+     *
+     * Two modes are supported:
+     *   1. Normal cart checkout — pulls items from `Cart` and clears it on success.
+     *   2. "Buy Now" checkout — caller passes `buy_now: { product_id, quantity }`.
+     *      The cart is intentionally NOT touched: the order will only contain
+     *      that single product with the chosen quantity, totally separate from
+     *      whatever the customer happens to keep in their cart.
      */
     public function checkout(Request $request, MidtransService $mt): JsonResponse
     {
         $data = $request->validate([
-            'recipient_name'   => ['required', 'string', 'max:120'],
-            'recipient_phone'  => ['required', 'string', 'max:20'],
-            'shipping_address' => ['required', 'string'],
-            'courier'          => ['required', 'string', 'in:jne,jnt,pos,tiki'],
-            'courier_service'  => ['required', 'string'],
-            'shipping_cost'    => ['required', 'integer', 'min:0'],
-            'voucher_code'     => ['nullable', 'string', 'max:40'],
+            'recipient_name'        => ['required', 'string', 'max:120'],
+            'recipient_phone'       => ['required', 'string', 'max:20'],
+            'shipping_address'      => ['required', 'string'],
+            'courier'               => ['required', 'string', 'in:jne,jnt,pos,tiki'],
+            'courier_service'       => ['required', 'string'],
+            'shipping_cost'         => ['required', 'integer', 'min:0'],
+            'voucher_code'          => ['nullable', 'string', 'max:40'],
+            'buy_now'               => ['nullable', 'array'],
+            'buy_now.product_id'    => ['required_with:buy_now', 'integer'],
+            'buy_now.quantity'      => ['required_with:buy_now', 'integer', 'min:1'],
         ]);
 
-        $user = $request->user();
-        $cart = Cart::where('user_id', $user->id)->with('items.product')->first();
-        abort_if(! $cart || $cart->items->isEmpty(), 422, 'Keranjang kosong.');
+        $user   = $request->user();
+        $buyNow = $data['buy_now'] ?? null;
 
-        return DB::transaction(function () use ($user, $cart, $data, $mt) {
-            $subtotal   = 0;
-            $opCost     = 0;
-            $itemsData  = [];
-
+        // Build the list of (product, quantity) pairs we'll charge for. In
+        // "Beli Sekarang" mode we ignore the cart entirely; otherwise we
+        // pull from the cart as before.
+        if ($buyNow) {
+            $product = Product::find($buyNow['product_id']);
+            abort_if(! $product || ! $product->is_active, 422, 'Produk tidak tersedia.');
+            $qty = (int) $buyNow['quantity'];
+            abort_if($qty > $product->stock, 422, "Stok {$product->name} kurang.");
+            $sources = [(object) ['product' => $product, 'quantity' => $qty]];
+            $cart    = null;
+        } else {
+            $cart = Cart::where('user_id', $user->id)->with('items.product')->first();
+            abort_if(! $cart || $cart->items->isEmpty(), 422, 'Keranjang kosong.');
+            $sources = [];
             foreach ($cart->items as $ci) {
                 /** @var Product $p */
                 $p = $ci->product;
                 abort_if(! $p || ! $p->is_active, 422, 'Produk tidak tersedia.');
                 abort_if($ci->quantity > $p->stock, 422, "Stok {$p->name} kurang.");
+                $sources[] = (object) ['product' => $p, 'quantity' => $ci->quantity];
+            }
+        }
 
-                $lineSub = ($p->price + $p->operational_cost) * $ci->quantity;
-                $subtotal += $p->price * $ci->quantity;
-                $opCost   += $p->operational_cost * $ci->quantity;
+        return DB::transaction(function () use ($user, $cart, $sources, $data, $mt, $buyNow) {
+            $subtotal  = 0;
+            $opCost    = 0;
+            $itemsData = [];
+
+            foreach ($sources as $s) {
+                /** @var Product $p */
+                $p = $s->product;
+                $lineSub  = ($p->price + $p->operational_cost) * $s->quantity;
+                $subtotal += $p->price * $s->quantity;
+                $opCost   += $p->operational_cost * $s->quantity;
 
                 $itemsData[] = [
-                    'product_id' => $p->id,
-                    'product_name' => $p->name,
-                    'price_snapshot' => $p->price,
+                    'product_id'                => $p->id,
+                    'product_name'              => $p->name,
+                    'price_snapshot'            => $p->price,
                     'operational_cost_snapshot' => $p->operational_cost,
-                    'quantity' => $ci->quantity,
-                    'subtotal' => $lineSub,
+                    'quantity'                  => $s->quantity,
+                    'subtotal'                  => $lineSub,
                 ];
             }
 
@@ -116,15 +145,18 @@ class OrderController extends Controller
                 OrderItem::create($d);
             }
 
-            // Decrement stock
-            foreach ($cart->items as $ci) {
-                $ci->product->decrement('stock', $ci->quantity);
+            // Decrement stock from whichever source we used.
+            foreach ($sources as $s) {
+                $s->product->decrement('stock', $s->quantity);
             }
 
             if ($voucher) $voucher->increment('used_count');
 
-            // Clear cart
-            $cart->items()->delete();
+            // Only clear the cart for normal checkouts. "Beli Sekarang" must
+            // leave the existing cart untouched.
+            if (! $buyNow && $cart) {
+                $cart->items()->delete();
+            }
 
             $snap = $mt->createSnapToken($order->load('items', 'user'));
             $order->update([
