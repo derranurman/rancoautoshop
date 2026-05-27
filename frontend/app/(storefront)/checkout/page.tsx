@@ -20,20 +20,32 @@ type Cost = { courier: string; service: string; description: string; cost: numbe
  * lagi nunggu jaringan ke RajaOngkir setiap kali dibuka. TTL 7 hari sudah
  * cukup (jarang ada provinsi/kota baru).
  */
+/** TTL default 7 hari untuk data yang sangat statis (provinsi, kota). */
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-function cacheGet<T>(key: string): T | null {
+function cacheGet<T>(key: string, ttl: number = CACHE_TTL_MS): T | null {
   if (typeof window === 'undefined') return null;
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return null;
     const obj = JSON.parse(raw) as { ts: number; v: T };
-    if (Date.now() - obj.ts > CACHE_TTL_MS) return null;
+    if (Date.now() - obj.ts > ttl) return null;
     return obj.v;
   } catch { return null; }
 }
 function cacheSet<T>(key: string, v: T) {
   if (typeof window === 'undefined') return;
   try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), v })); } catch { /* quota? ignore */ }
+}
+
+/** Normalisasi nama provinsi/kota supaya match-nya toleran (whitespace, prefix). */
+function normName(s: string | null | undefined): string {
+  return (s ?? '')
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/^provinsi\s+/, '')
+    .replace(/^dki\s+/, '');
 }
 
 /** Snapshot mini produk yang disimpan di sessionStorage untuk mode Beli Sekarang. */
@@ -99,9 +111,21 @@ function CheckoutPageInner() {
       // Cart tetap di-fetch supaya badge "Keranjang" di navbar tetap update.
       // Angkanya tidak dipakai di halaman ini saat mode Beli Sekarang.
       fetchCart();
+
+      // Daftar alamat: tampilkan dari cache localStorage dulu (TTL 5 menit)
+      // supaya user yang sebelumnya sudah pernah checkout langsung lihat
+      // alamatnya tanpa kedip "Pilih dari alamat tersimpan" → form kosong.
+      const cachedAddrs = cacheGet<Address[]>(`ranco.addresses.${user.id}`, 5 * 60 * 1000);
+      if (cachedAddrs && cachedAddrs.length > 0) {
+        setAddresses(cachedAddrs);
+      }
       api.get('/addresses')
-        .then((r) => setAddresses(r.data.data ?? []))
-        .catch(() => setAddresses([]));
+        .then((r) => {
+          const list = (r.data.data ?? []) as Address[];
+          setAddresses(list);
+          cacheSet(`ranco.addresses.${user.id}`, list);
+        })
+        .catch(() => { if (!cachedAddrs) setAddresses([]); });
     }
     // Provinsi: pakai cache localStorage dulu supaya UI tidak nge-blank tunggu
     // network. Kalau cache ada, langsung pakai; di latar belakang tetap
@@ -213,16 +237,34 @@ function CheckoutPageInner() {
   function applyAddress(a: Address) {
     setRecipient({ name: a.recipient_name, phone: a.phone, address: a.address_line });
     setPostalCode(a.postal_code ?? '');
-    // Match province by name (province_id is RajaOngkir-side, not stored here).
-    const prov = provinces.find(
-      (p) => p.province.toLowerCase() === (a.province ?? '').toLowerCase(),
-    );
+
+    // FAST PATH: kalau alamat tersimpan punya city_id RajaOngkir, langsung set
+    // sebagai destination ongkir. Tidak perlu nunggu province → cities di-fetch
+    // dulu, jadi user yang sudah pernah checkout tidak akan kena delay sama
+    // sekali untuk hitung ongkir.
+    if (a.city_id) {
+      setCityId(a.city_id);
+    }
+
+    // Match province by name untuk kebutuhan dropdown UI (kalau user buka
+    // mode "Ubah"). Pakai normalisasi case/whitespace/prefix supaya toleran
+    // terhadap "DKI Jakarta" vs "Jakarta", "Provinsi Jawa Barat" vs "Jawa Barat", dst.
+    const target = normName(a.province);
+    const prov = provinces.find((p) => normName(p.province) === target);
     if (prov) {
       setProvinceId(prov.province_id);
-      // Cities will load via the effect; we set city_id when they arrive.
-      pendingCityIdRef.current = a.city_id ?? null;
-      pendingCityNameRef.current = a.city ?? null;
+      // Kalau cityId belum ke-set di fast-path (alamat tersimpan tidak punya
+      // city_id), kita resolve dari nama kota saat cities arrive.
+      if (!a.city_id) {
+        pendingCityIdRef.current = null;
+        pendingCityNameRef.current = a.city ?? null;
+      } else {
+        pendingCityIdRef.current = null;
+        pendingCityNameRef.current = null;
+      }
     } else {
+      // Province tidak ketemu — biarkan dropdown kosong, tapi cityId tetap
+      // berfungsi kalau sudah di-set lewat fast-path di atas.
       setProvinceId('');
     }
   }
@@ -238,13 +280,17 @@ function CheckoutPageInner() {
     const wantId = pendingCityIdRef.current;
     const wantName = pendingCityNameRef.current;
     if (!wantId && !wantName) return;
+    const wantNameNorm = normName(wantName);
     const match =
       (wantId && cities.find((c) => c.city_id === wantId)) ||
-      (wantName && cities.find(
-        (c) =>
-          `${c.type} ${c.city_name}`.toLowerCase() === wantName.toLowerCase()
-          || c.city_name.toLowerCase() === wantName.toLowerCase(),
-      )) ||
+      (wantName && cities.find((c) => {
+        const full = normName(`${c.type} ${c.city_name}`);
+        const just = normName(c.city_name);
+        return full === wantNameNorm
+            || just === wantNameNorm
+            || full.includes(wantNameNorm)
+            || wantNameNorm.includes(just);
+      })) ||
       null;
     if (match) {
       setCityId(match.city_id);
@@ -287,31 +333,40 @@ function CheckoutPageInner() {
     : (cart?.total_weight ?? 0);
 
   // Auto-cek ongkir: begitu kota & kurir + berat siap, langsung fetch tanpa
-  // perlu user klik tombol. Pakai sedikit debounce supaya tidak nge-spam
-  // RajaOngkir saat user gonta-ganti pilihan cepat.
+  // perlu user klik tombol. Hasil ongkir di-cache di localStorage (TTL 30
+  // menit) per kombinasi (city_id × kurir × berat) supaya kunjungan
+  // berikutnya dengan tujuan yang sama langsung tampil tanpa hit RajaOngkir.
   const [costsLoading, setCostsLoading] = useState(false);
   useEffect(() => {
     if (!cityId) { setCosts([]); setChosenCost(null); return; }
     if (!buyNow && !cart) return;
     if (viewWeight <= 0) return;
 
+    const weight = Math.max(1, viewWeight);
+    const cacheKey = `ranco.cost.${cityId}.${courier}.${weight}`;
+    const cached = cacheGet<Cost[]>(cacheKey, 30 * 60 * 1000);
+    if (cached && cached.length > 0) {
+      setCosts(cached);
+      setChosenCost((prev) => prev ?? cached[0] ?? null);
+      // tetap refresh di latar belakang biar harga tidak basi.
+    }
+
     const timer = setTimeout(async () => {
       setCostsLoading(true);
       try {
         const r = await api.post('/shipping/cost', {
           destination: cityId,
-          weight: Math.max(1, viewWeight),
+          weight,
           courier,
         });
         const list = (r.data.data ?? []) as Cost[];
         setCosts(list);
-        // Pilih opsi pertama otomatis kalau belum ada yang dipilih, jadi
-        // user tinggal scroll ke bawah & klik "Bayar Sekarang".
         setChosenCost((prev) => prev ?? list[0] ?? null);
+        if (list.length > 0) cacheSet(cacheKey, list);
       } catch (e) {
-        toast.error(apiError(e));
+        if (!cached) toast.error(apiError(e));
       } finally { setCostsLoading(false); }
-    }, 250);
+    }, 80);
 
     return () => clearTimeout(timer);
   }, [cityId, courier, viewWeight]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -366,10 +421,17 @@ function CheckoutPageInner() {
             postal_code: pc || cityObj.postal_code || '',
             is_default: addresses.length === 0,
           });
-          // Sinkronkan state lokal supaya UI alamat tersimpan ikut update.
+          // Sinkronkan state lokal supaya UI alamat tersimpan ikut update,
+          // dan refresh cache localStorage agar kunjungan checkout berikutnya
+          // langsung pakai alamat ini tanpa fetch.
           if (saved?.data?.data) {
-            setAddresses((prev) => [...prev, saved.data.data]);
-            setSelectedAddrId(saved.data.data.id);
+            const newAddr = saved.data.data as Address;
+            setAddresses((prev) => {
+              const next = [...prev, newAddr];
+              if (user) cacheSet(`ranco.addresses.${user.id}`, next);
+              return next;
+            });
+            setSelectedAddrId(newAddr.id);
           }
         } catch {
           // Bukan kegagalan kritis — checkout tetap lanjut walau save alamat gagal.
