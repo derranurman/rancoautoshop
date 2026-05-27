@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -11,9 +12,24 @@ use Illuminate\Support\Facades\Log;
  *
  * When no API key is configured (or the live call fails), falls back to a
  * mock so the dev UI still works end-to-end.
+ *
+ * Caching strategy:
+ * - provinces: 24h (very static)
+ * - cities per province: 24h (very static)
+ * - cost per origin/destination/weight/courier: 6h (price rarely changes
+ *   intra-day; lets repeat checkout views render instantly without hitting
+ *   the upstream API and prevents PHP-FPM worker exhaustion when the user
+ *   toggles couriers repeatedly).
  */
 class RajaOngkirService
 {
+    /** Couriers actually allowed by RajaOngkir's starter plan. */
+    protected const STARTER_COURIERS = ['jne', 'pos', 'tiki'];
+
+    /** Per-call HTTP timeouts (kept short — we'd rather mock than hang the UI). */
+    protected const HTTP_CONNECT_TIMEOUT = 3;
+    protected const HTTP_TIMEOUT         = 5;
+
     protected string $baseUrl;
     protected ?string $apiKey;
     protected string $originCityId;
@@ -36,17 +52,21 @@ class RajaOngkirService
         if (! $this->enabled()) {
             return $this->mockProvinces();
         }
-        try {
-            $res = Http::timeout(8)->withHeaders(['key' => $this->apiKey])
-                ->get("{$this->baseUrl}/province");
-            $rows = $res->json('rajaongkir.results') ?? [];
-            // If RajaOngkir returns nothing (bad key, plan limit, downtime),
-            // don't leave the dropdown empty — fall back to the mock list.
-            return ! empty($rows) ? $rows : $this->mockProvinces();
-        } catch (\Throwable $e) {
-            Log::warning('[rajaongkir] provinces failed: '.$e->getMessage());
-            return $this->mockProvinces();
-        }
+        return Cache::remember('rajaongkir.provinces', now()->addHours(24), function () {
+            try {
+                $res = Http::connectTimeout(self::HTTP_CONNECT_TIMEOUT)
+                    ->timeout(self::HTTP_TIMEOUT)
+                    ->withHeaders(['key' => $this->apiKey])
+                    ->get("{$this->baseUrl}/province");
+                $rows = $res->json('rajaongkir.results') ?? [];
+                // If RajaOngkir returns nothing (bad key, plan limit, downtime),
+                // don't leave the dropdown empty — fall back to the mock list.
+                return ! empty($rows) ? $rows : $this->mockProvinces();
+            } catch (\Throwable $e) {
+                Log::warning('[rajaongkir] provinces failed: '.$e->getMessage());
+                return $this->mockProvinces();
+            }
+        });
     }
 
     /** GET /city?province=ID */
@@ -55,15 +75,20 @@ class RajaOngkirService
         if (! $this->enabled()) {
             return $this->mockCities($provinceId);
         }
-        try {
-            $res = Http::timeout(8)->withHeaders(['key' => $this->apiKey])
-                ->get("{$this->baseUrl}/city", array_filter(['province' => $provinceId]));
-            $rows = $res->json('rajaongkir.results') ?? [];
-            return ! empty($rows) ? $rows : $this->mockCities($provinceId);
-        } catch (\Throwable $e) {
-            Log::warning('[rajaongkir] cities failed: '.$e->getMessage());
-            return $this->mockCities($provinceId);
-        }
+        $cacheKey = 'rajaongkir.cities.'.($provinceId ?: 'all');
+        return Cache::remember($cacheKey, now()->addHours(24), function () use ($provinceId) {
+            try {
+                $res = Http::connectTimeout(self::HTTP_CONNECT_TIMEOUT)
+                    ->timeout(self::HTTP_TIMEOUT)
+                    ->withHeaders(['key' => $this->apiKey])
+                    ->get("{$this->baseUrl}/city", array_filter(['province' => $provinceId]));
+                $rows = $res->json('rajaongkir.results') ?? [];
+                return ! empty($rows) ? $rows : $this->mockCities($provinceId);
+            } catch (\Throwable $e) {
+                Log::warning('[rajaongkir] cities failed: '.$e->getMessage());
+                return $this->mockCities($provinceId);
+            }
+        });
     }
 
     /**
@@ -71,40 +96,57 @@ class RajaOngkirService
      *
      * @param  string  $destinationCityId  RajaOngkir destination city id
      * @param  int     $weightGram         total weight in grams
-     * @param  string  $courier            jne|pos|tiki (starter)
+     * @param  string  $courier            jne|pos|tiki (starter); jnt always mock
      */
     public function cost(string $destinationCityId, int $weightGram, string $courier = 'jne'): array
     {
-        if (! $this->enabled()) {
-            return $this->mockCost($courier, $weightGram);
+        $courier = strtolower(trim($courier));
+        $weight  = max(1, $weightGram);
+
+        // Short-circuit: starter plan does not support J&T (jnt), so calling
+        // RajaOngkir always wastes a full round-trip before failing. Just
+        // serve the mock immediately for a snappy UI.
+        if (! $this->enabled() || ! in_array($courier, self::STARTER_COURIERS, true)) {
+            return $this->mockCost($courier, $weight);
         }
-        try {
-            $res = Http::timeout(8)->asForm()->withHeaders(['key' => $this->apiKey])
-                ->post("{$this->baseUrl}/cost", [
-                    'origin'      => $this->originCityId,
-                    'destination' => $destinationCityId,
-                    'weight'      => max(1, $weightGram),
-                    'courier'     => $courier,
-                ]);
-            $results = $res->json('rajaongkir.results') ?? [];
-            // Flatten costs array for easier frontend consumption.
-            $flat = [];
-            foreach ($results as $r) {
-                foreach (($r['costs'] ?? []) as $c) {
-                    $flat[] = [
-                        'courier'  => $r['code'] ?? $courier,
-                        'service'  => $c['service'] ?? null,
-                        'description' => $c['description'] ?? null,
-                        'cost'     => (int) ($c['cost'][0]['value'] ?? 0),
-                        'etd'      => $c['cost'][0]['etd'] ?? null,
-                    ];
+
+        $cacheKey = sprintf(
+            'rajaongkir.cost.%s.%s.%d.%s',
+            $this->originCityId, $destinationCityId, $weight, $courier
+        );
+
+        return Cache::remember($cacheKey, now()->addHours(6), function () use ($destinationCityId, $weight, $courier) {
+            try {
+                $res = Http::connectTimeout(self::HTTP_CONNECT_TIMEOUT)
+                    ->timeout(self::HTTP_TIMEOUT)
+                    ->asForm()
+                    ->withHeaders(['key' => $this->apiKey])
+                    ->post("{$this->baseUrl}/cost", [
+                        'origin'      => $this->originCityId,
+                        'destination' => $destinationCityId,
+                        'weight'      => $weight,
+                        'courier'     => $courier,
+                    ]);
+                $results = $res->json('rajaongkir.results') ?? [];
+                // Flatten costs array for easier frontend consumption.
+                $flat = [];
+                foreach ($results as $r) {
+                    foreach (($r['costs'] ?? []) as $c) {
+                        $flat[] = [
+                            'courier'     => $r['code'] ?? $courier,
+                            'service'     => $c['service'] ?? null,
+                            'description' => $c['description'] ?? null,
+                            'cost'        => (int) (($c['cost'][0]['value'] ?? 0)),
+                            'etd'         => $c['cost'][0]['etd'] ?? null,
+                        ];
+                    }
                 }
+                return ! empty($flat) ? $flat : $this->mockCost($courier, $weight);
+            } catch (\Throwable $e) {
+                Log::warning('[rajaongkir] cost failed: '.$e->getMessage());
+                return $this->mockCost($courier, $weight);
             }
-            return ! empty($flat) ? $flat : $this->mockCost($courier, $weightGram);
-        } catch (\Throwable $e) {
-            Log::warning('[rajaongkir] cost failed: '.$e->getMessage());
-            return $this->mockCost($courier, $weightGram);
-        }
+        });
     }
 
     // --------------------- mocks ---------------------
