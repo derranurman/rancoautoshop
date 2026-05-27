@@ -2,11 +2,12 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { useAuth, useCart } from '@/lib/stores';
+import { useAuth, useCart, useSiteSettings } from '@/lib/stores';
 
 export default function Navbar() {
   const { user, loading, loadMe, logout } = useAuth();
   const { cart, fetch: fetchCart } = useCart();
+  const settings = useSiteSettings((s) => s.settings);
 
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -42,8 +43,20 @@ export default function Navbar() {
     <header className="bg-white border-b border-gray-200 sticky top-0 z-30">
       <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-4">
         <Link href="/" className="flex items-center gap-2 font-bold text-xl">
-          <span className="inline-block h-8 w-8 rounded-lg bg-brand text-white grid place-items-center">R</span>
-          <span className="text-ink">Ranco<span className="text-brand"> Autoshop</span></span>
+          {settings.logo_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={settings.logo_url}
+              alt={settings.app_name}
+              className="h-8 w-8 rounded-lg object-cover bg-white"
+            />
+          ) : (
+            // Fallback: huruf pertama nama toko (tetap pakai brand color).
+            <span className="inline-block h-8 w-8 rounded-lg bg-brand text-white grid place-items-center">
+              {(settings.app_name?.trim()?.charAt(0) ?? 'R').toUpperCase()}
+            </span>
+          )}
+          <BrandLabel name={settings.app_name} />
         </Link>
 
         <nav className="hidden md:flex items-center gap-6 text-sm ml-6">
@@ -144,5 +157,24 @@ export default function Navbar() {
         </div>
       </div>
     </header>
+  );
+}
+
+
+
+/**
+ * Render nama toko dengan kata kedua diberi warna brand — meniru pola lama
+ * "Ranco Autoshop" → "Ranco" hitam, "Autoshop" merah. Kalau cuma 1 kata,
+ * tampil polos. Diambil dari pengaturan admin supaya bisa diubah tanpa rilis.
+ */
+function BrandLabel({ name }: { name: string }) {
+  const trimmed = (name ?? '').trim();
+  if (!trimmed) return <span className="text-ink">Ranco<span className="text-brand"> Autoshop</span></span>;
+  const idx = trimmed.indexOf(' ');
+  if (idx === -1) return <span className="text-ink">{trimmed}</span>;
+  const first = trimmed.slice(0, idx);
+  const rest = trimmed.slice(idx + 1);
+  return (
+    <span className="text-ink">{first}<span className="text-brand"> {rest}</span></span>
   );
 }

@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\Admin\CategoryAdminController;
 use App\Http\Controllers\Api\Admin\DashboardController;
 use App\Http\Controllers\Api\Admin\OrderAdminController;
 use App\Http\Controllers\Api\Admin\ProductAdminController;
+use App\Http\Controllers\Api\Admin\SiteSettingsAdminController;
 use App\Http\Controllers\Api\Admin\UserAdminController;
 use App\Http\Controllers\Api\Admin\VoucherAdminController;
 use App\Http\Controllers\Api\AddressController;
@@ -14,6 +15,7 @@ use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ShippingController;
+use App\Http\Controllers\Api\SiteSettingsController;
 use App\Http\Controllers\Api\VoucherController;
 use Illuminate\Support\Facades\Route;
 
@@ -27,6 +29,9 @@ Route::post('/vouchers/check',     [VoucherController::class, 'check']);
 Route::get('/shipping/provinces',  [ShippingController::class, 'provinces']);
 Route::get('/shipping/cities',     [ShippingController::class, 'cities']);
 Route::post('/shipping/cost',      [ShippingController::class, 'cost']);
+
+// Public site settings (logo, hero, footer, WA widget) — dipakai storefront.
+Route::get('/site-settings',       [SiteSettingsController::class, 'show']);
 
 // ----------------- Auth (public) -----------------
 Route::post('/auth/register',      [AuthController::class, 'register']);
@@ -89,5 +94,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::patch('/users/{user}',        [UserAdminController::class, 'update']);
         Route::delete('/users/{user}',       [UserAdminController::class, 'destroy']);
         Route::patch('/users/{user}/toggle-suspend', [UserAdminController::class, 'toggleSuspend']);
+
+        // Pengaturan Tampilan (logo, hero, footer, widget WhatsApp).
+        Route::get('/site-settings',          [SiteSettingsAdminController::class, 'show']);
+        Route::put('/site-settings',          [SiteSettingsAdminController::class, 'update']);
+        Route::post('/site-settings/upload',  [SiteSettingsAdminController::class, 'uploadAsset']);
     });
 });

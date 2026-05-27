@@ -6,13 +6,14 @@ import { useEffect } from 'react';
 import { useAdminAuth } from '@/lib/stores';
 
 const NAV = [
-  { href: '/admin/dashboard', label: 'Dashboard' },
-  { href: '/admin/products',  label: 'Produk' },
-  { href: '/admin/orders',    label: 'Pesanan' },
-  { href: '/admin/users',     label: 'Pelanggan' },
-  { href: '/admin/vouchers',  label: 'Voucher' },
-  { href: '/admin/reports',   label: 'Laporan' },
-  { href: '/admin/profile',   label: 'Profil Admin' },
+  { href: '/admin/dashboard',  label: 'Dashboard' },
+  { href: '/admin/products',   label: 'Produk' },
+  { href: '/admin/orders',     label: 'Pesanan' },
+  { href: '/admin/users',      label: 'Pelanggan' },
+  { href: '/admin/vouchers',   label: 'Voucher' },
+  { href: '/admin/reports',    label: 'Laporan' },
+  { href: '/admin/appearance', label: 'Tampilan' },
+  { href: '/admin/profile',    label: 'Profil Admin' },
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
