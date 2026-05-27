@@ -253,15 +253,12 @@ function CheckoutPageInner() {
     const prov = provinces.find((p) => normName(p.province) === target);
     if (prov) {
       setProvinceId(prov.province_id);
-      // Kalau cityId belum ke-set di fast-path (alamat tersimpan tidak punya
-      // city_id), kita resolve dari nama kota saat cities arrive.
-      if (!a.city_id) {
-        pendingCityIdRef.current = null;
-        pendingCityNameRef.current = a.city ?? null;
-      } else {
-        pendingCityIdRef.current = null;
-        pendingCityNameRef.current = null;
-      }
+      // Always populate pending refs sebagai safety net. Saat setProvinceId
+      // di atas men-trigger province effect, cityId fast-path bisa ter-reset
+      // ke ''. Cities-effect berikutnya akan baca refs ini dan men-set
+      // cityId balik (lewat city_id kalau ada, atau lookup by nama kota).
+      pendingCityIdRef.current = a.city_id ?? null;
+      pendingCityNameRef.current = a.city ?? null;
     } else {
       // Province tidak ketemu — biarkan dropdown kosong, tapi cityId tetap
       // berfungsi kalau sudah di-set lewat fast-path di atas.
@@ -295,6 +292,27 @@ function CheckoutPageInner() {
     if (match) {
       setCityId(match.city_id);
       if (!postalCode) setPostalCode(match.postal_code);
+
+      // Migration: kalau saved address yang lagi terpilih belum punya
+      // city_id (alamat lama, dibuat sebelum kode ini ada), simpan city_id
+      // hasil resolve ke server. Kunjungan checkout berikutnya langsung
+      // pakai fast-path tanpa perlu lookup nama kota lagi.
+      if (typeof selectedAddrId === 'number') {
+        const addr = addresses.find((a) => a.id === selectedAddrId);
+        if (addr && !addr.city_id) {
+          api.patch(`/addresses/${addr.id}`, { city_id: match.city_id })
+            .then(() => {
+              setAddresses((prev) => {
+                const next = prev.map((a) =>
+                  a.id === addr.id ? { ...a, city_id: match.city_id } : a,
+                );
+                if (user) cacheSet(`ranco.addresses.${user.id}`, next);
+                return next;
+              });
+            })
+            .catch(() => { /* opsional, abaikan */ });
+        }
+      }
     }
     pendingCityIdRef.current = null;
     pendingCityNameRef.current = null;
