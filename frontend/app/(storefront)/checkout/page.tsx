@@ -354,9 +354,22 @@ function CheckoutPageInner() {
   // perlu user klik tombol. Hasil ongkir di-cache di localStorage (TTL 30
   // menit) per kombinasi (city_id × kurir × berat) supaya kunjungan
   // berikutnya dengan tujuan yang sama langsung tampil tanpa hit RajaOngkir.
+  //
+  // Penting: gunakan AbortController + debounce 250ms supaya saat user
+  // berpindah-pindah kurir dengan cepat (JNE → J&T → POS), request lama
+  // dibatalkan dulu sebelum yang baru dikirim. Tanpa ini, beberapa request
+  // ke RajaOngkir berjalan paralel, response yang datang terakhir bisa
+  // tidak sesuai dengan kurir terpilih, dan PHP-FPM bisa kehabisan worker
+  // yang akhirnya muncul sebagai error 500 di browser.
   const [costsLoading, setCostsLoading] = useState(false);
+  const costAbortRef = useRef<AbortController | null>(null);
   useEffect(() => {
-    if (!cityId) { setCosts([]); setChosenCost(null); return; }
+    if (!cityId) {
+      setCosts([]);
+      setChosenCost(null);
+      setCostsLoading(false);
+      return;
+    }
     if (!buyNow && !cart) return;
     if (viewWeight <= 0) return;
 
@@ -367,26 +380,55 @@ function CheckoutPageInner() {
       setCosts(cached);
       setChosenCost((prev) => prev ?? cached[0] ?? null);
       // tetap refresh di latar belakang biar harga tidak basi.
+    } else {
+      // Tampilkan loading lebih awal kalau cache miss, supaya user tahu
+      // sistem sedang mengambil tarif baru.
+      setCostsLoading(true);
     }
 
     const timer = setTimeout(async () => {
+      // Cancel any previous in-flight request before firing a new one.
+      costAbortRef.current?.abort();
+      const controller = new AbortController();
+      costAbortRef.current = controller;
+
       setCostsLoading(true);
       try {
-        const r = await api.post('/shipping/cost', {
-          destination: cityId,
-          weight,
-          courier,
-        });
+        const r = await api.post(
+          '/shipping/cost',
+          { destination: cityId, weight, courier },
+          { signal: controller.signal },
+        );
         const list = (r.data.data ?? []) as Cost[];
         setCosts(list);
         setChosenCost((prev) => prev ?? list[0] ?? null);
         if (list.length > 0) cacheSet(cacheKey, list);
-      } catch (e) {
+      } catch (e: unknown) {
+        // Axios cancel = jangan tampilkan toast, ini bukan kegagalan.
+        const err = e as { code?: string; name?: string; message?: string };
+        const isCanceled =
+          err?.code === 'ERR_CANCELED' ||
+          err?.name === 'CanceledError' ||
+          err?.name === 'AbortError' ||
+          err?.message === 'canceled';
+        if (isCanceled) return;
+        // Hanya tampilkan toast kalau kita tidak punya cache untuk ditampilkan.
+        // Selain itu cukup biarkan UI menampilkan data lama / state kosong.
         if (!cached) toast.error(apiError(e));
-      } finally { setCostsLoading(false); }
-    }, 80);
+      } finally {
+        // Hanya matikan loading kalau controller ini yang masih aktif —
+        // kalau sudah dibatalkan oleh request berikutnya, biarkan request
+        // baru yang mengontrol state loading.
+        if (costAbortRef.current === controller) {
+          setCostsLoading(false);
+        }
+      }
+    }, 250);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      costAbortRef.current?.abort();
+    };
   }, [cityId, courier, viewWeight]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function applyVoucher() {
