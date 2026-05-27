@@ -14,6 +14,28 @@ type Province = { province_id: string; province: string };
 type City = { city_id: string; province_id: string; type: string; city_name: string; postal_code: string };
 type Cost = { courier: string; service: string; description: string; cost: number; etd: string };
 
+/**
+ * Cache helper berbasis localStorage untuk data yang sangat statis seperti
+ * daftar provinsi & kota RajaOngkir. Tujuannya supaya halaman checkout tidak
+ * lagi nunggu jaringan ke RajaOngkir setiap kali dibuka. TTL 7 hari sudah
+ * cukup (jarang ada provinsi/kota baru).
+ */
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+function cacheGet<T>(key: string): T | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const obj = JSON.parse(raw) as { ts: number; v: T };
+    if (Date.now() - obj.ts > CACHE_TTL_MS) return null;
+    return obj.v;
+  } catch { return null; }
+}
+function cacheSet<T>(key: string, v: T) {
+  if (typeof window === 'undefined') return;
+  try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), v })); } catch { /* quota? ignore */ }
+}
+
 /** Snapshot mini produk yang disimpan di sessionStorage untuk mode Beli Sekarang. */
 interface BuyNowItem {
   product_id: number;
@@ -81,10 +103,25 @@ function CheckoutPageInner() {
         .then((r) => setAddresses(r.data.data ?? []))
         .catch(() => setAddresses([]));
     }
-    setProvincesLoading(true);
+    // Provinsi: pakai cache localStorage dulu supaya UI tidak nge-blank tunggu
+    // network. Kalau cache ada, langsung pakai; di latar belakang tetap
+    // refresh dari server supaya data nggak basi.
+    const cached = cacheGet<Province[]>('ranco.provinces');
+    if (cached && cached.length > 0) {
+      setProvinces(cached);
+      setProvincesLoading(false);
+    } else {
+      setProvincesLoading(true);
+    }
     api.get('/shipping/provinces')
-      .then((r) => setProvinces(r.data.data ?? []))
-      .catch((e) => toast.error('Gagal memuat daftar provinsi: ' + apiError(e)))
+      .then((r) => {
+        const list = (r.data.data ?? []) as Province[];
+        setProvinces(list);
+        cacheSet('ranco.provinces', list);
+      })
+      .catch((e) => {
+        if (!cached) toast.error('Gagal memuat daftar provinsi: ' + apiError(e));
+      })
       .finally(() => setProvincesLoading(false));
   }, [user, authLoading, fetchCart, router]);
 
@@ -122,12 +159,24 @@ function CheckoutPageInner() {
   // Load cities whenever province changes (and reset downstream selections).
   useEffect(() => {
     if (provinceId) {
-      setCitiesLoading(true);
+      const cached = cacheGet<City[]>(`ranco.cities.${provinceId}`);
+      if (cached && cached.length > 0) {
+        setCities(cached);
+        setCitiesLoading(false);
+      } else {
+        setCitiesLoading(true);
+      }
       api.get('/shipping/cities', { params: { province_id: provinceId } })
-        .then((r) => setCities(r.data.data ?? []))
+        .then((r) => {
+          const list = (r.data.data ?? []) as City[];
+          setCities(list);
+          cacheSet(`ranco.cities.${provinceId}`, list);
+        })
         .catch((e) => {
-          toast.error('Gagal memuat daftar kota: ' + apiError(e));
-          setCities([]);
+          if (!cached) {
+            toast.error('Gagal memuat daftar kota: ' + apiError(e));
+            setCities([]);
+          }
         })
         .finally(() => setCitiesLoading(false));
     } else {
@@ -237,18 +286,35 @@ function CheckoutPageInner() {
     ? Math.max(1, buyNow._preview.weight * buyNow.quantity)
     : (cart?.total_weight ?? 0);
 
-  async function calcCost() {
-    if (!cityId) return;
+  // Auto-cek ongkir: begitu kota & kurir + berat siap, langsung fetch tanpa
+  // perlu user klik tombol. Pakai sedikit debounce supaya tidak nge-spam
+  // RajaOngkir saat user gonta-ganti pilihan cepat.
+  const [costsLoading, setCostsLoading] = useState(false);
+  useEffect(() => {
+    if (!cityId) { setCosts([]); setChosenCost(null); return; }
     if (!buyNow && !cart) return;
-    try {
-      const r = await api.post('/shipping/cost', {
-        destination: cityId,
-        weight: Math.max(1, viewWeight),
-        courier,
-      });
-      setCosts(r.data.data); setChosenCost(null);
-    } catch (e) { toast.error(apiError(e)); }
-  }
+    if (viewWeight <= 0) return;
+
+    const timer = setTimeout(async () => {
+      setCostsLoading(true);
+      try {
+        const r = await api.post('/shipping/cost', {
+          destination: cityId,
+          weight: Math.max(1, viewWeight),
+          courier,
+        });
+        const list = (r.data.data ?? []) as Cost[];
+        setCosts(list);
+        // Pilih opsi pertama otomatis kalau belum ada yang dipilih, jadi
+        // user tinggal scroll ke bawah & klik "Bayar Sekarang".
+        setChosenCost((prev) => prev ?? list[0] ?? null);
+      } catch (e) {
+        toast.error(apiError(e));
+      } finally { setCostsLoading(false); }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [cityId, courier, viewWeight]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function applyVoucher() {
     if (!voucherCode) { setDiscount(0); return; }
@@ -279,6 +345,37 @@ function CheckoutPageInner() {
 
     setSubmitting(true);
     try {
+      // Kalau pembeli mengisi alamat baru manual (bukan dari alamat tersimpan),
+      // simpan dulu sebagai entry di buku alamat supaya checkout berikutnya
+      // tinggal pilih dan tidak perlu mengisi ulang. Dijadikan default kalau
+      // dia memang belum punya alamat tersimpan sebelumnya.
+      if (selectedAddrId === 'new'
+          && recipient.name?.trim()
+          && recipient.phone?.trim()
+          && recipient.address?.trim()
+          && cityObj && provObj) {
+        try {
+          const saved = await api.post('/addresses', {
+            label: 'Rumah',
+            recipient_name: recipient.name,
+            phone: recipient.phone,
+            address_line: recipient.address,
+            province: provObj.province,
+            city: `${cityObj.type} ${cityObj.city_name}`,
+            city_id: cityObj.city_id,
+            postal_code: pc || cityObj.postal_code || '',
+            is_default: addresses.length === 0,
+          });
+          // Sinkronkan state lokal supaya UI alamat tersimpan ikut update.
+          if (saved?.data?.data) {
+            setAddresses((prev) => [...prev, saved.data.data]);
+            setSelectedAddrId(saved.data.data.id);
+          }
+        } catch {
+          // Bukan kegagalan kritis — checkout tetap lanjut walau save alamat gagal.
+        }
+      }
+
       const payload: Record<string, unknown> = {
         recipient_name: recipient.name,
         recipient_phone: recipient.phone,
@@ -562,7 +659,7 @@ function CheckoutPageInner() {
 
         <div className="card p-4">
           <h2 className="font-semibold mb-3">Pengiriman</h2>
-          <div className="flex gap-2 mb-3 flex-wrap">
+          <div className="flex gap-2 mb-3 flex-wrap items-center">
             {COURIER_CODES.map((c) => (
               <button
                 key={c}
@@ -573,13 +670,15 @@ function CheckoutPageInner() {
                 {COURIERS[c].label}
               </button>
             ))}
-            <button onClick={calcCost} disabled={!cityId} className="btn-primary ml-auto"
-                    title={cekOngkirHint ?? undefined}>
-              Cek Ongkir
-            </button>
+            {costsLoading && (
+              <span className="ml-auto text-xs text-gray-500">Menghitung ongkir...</span>
+            )}
           </div>
-          {cekOngkirHint && (
+          {!cityId && cekOngkirHint && (
             <div className="text-xs text-gray-500 mb-2">{cekOngkirHint}.</div>
+          )}
+          {cityId && !costsLoading && costs.length === 0 && (
+            <div className="text-xs text-gray-500 mb-2">Tidak ada layanan tersedia untuk kurir ini. Coba kurir lain.</div>
           )}
           <div className="space-y-2">
             {costs.map((c, i) => (
