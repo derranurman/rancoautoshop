@@ -1,6 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Library xlsx (SheetJS) di npm punya package.json tanpa "exports" field
+  // yang proper, sehingga Next.js gagal men-generate chunk URL saat dynamic
+  // import (gejalanya: "Loading chunk failed" dengan URL .../_next/undefined).
+  // Memasukkan ke transpilePackages memaksa webpack memproses ulang lewat SWC,
+  // hasilnya import-nya stabil baik static maupun dynamic.
+  transpilePackages: ['xlsx'],
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: 'placehold.co' },

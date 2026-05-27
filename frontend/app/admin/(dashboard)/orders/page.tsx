@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
+import * as XLSX from 'xlsx';
 import { api, apiError, formatRupiah } from '@/lib/api';
 import type { Order } from '@/lib/types';
 
@@ -94,9 +95,12 @@ export default function AdminOrdersPage() {
         'Tgl Bayar'       : formatDateTime(o.paid_at),
       }));
 
-      // Dynamic import supaya bundle awal tetap kecil — library xlsx (~430KB)
-      // hanya dimuat saat admin benar-benar mengklik tombol export.
-      const XLSX = await import('xlsx');
+      // Pakai static import (lihat top-of-file). Sebelumnya pakai dynamic
+      // import, tapi xlsx (SheetJS) di npm punya struktur ESM yang bikin
+      // Next.js webpack gagal men-generate chunk URL — gejalanya error
+      // "Loading chunk ... failed (.../_next/undefined)" saat klik tombol.
+      // Bundle xlsx hanya termuat di halaman admin yang import dia, jadi
+      // tidak mempengaruhi bundle storefront.
       const ws = XLSX.utils.json_to_sheet(sheetRows);
       // Auto-width kolom ringan (pakai panjang max isi tiap kolom).
       const headers = Object.keys(sheetRows[0]);

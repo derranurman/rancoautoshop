@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
+import * as XLSX from 'xlsx';
 import { api, apiError, formatRupiah } from '@/lib/api';
 
 interface Row {
@@ -128,8 +129,8 @@ export default function ReportsPage() {
         'No HP'        : r.buyer_phone ?? '',
       }));
 
-      // Lazy-load xlsx hanya saat dibutuhkan supaya bundle initial tetap kecil.
-      const XLSX = await import('xlsx');
+      // Pakai static import (lihat top-of-file) — dynamic import bermasalah
+      // dengan struktur ESM xlsx di Next.js (chunk URL undefined).
       const ws = XLSX.utils.json_to_sheet(sheetRows);
       const headers = Object.keys(sheetRows[0]);
       ws['!cols'] = headers.map((h) => ({
