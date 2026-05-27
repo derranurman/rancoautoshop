@@ -24,6 +24,31 @@ class OrderAdminController extends Controller
         if ($status = $request->string('status')->value()) {
             $q->where('status', $status);
         }
+
+        // Filter rentang tanggal pembuatan order (admin Pesanan).
+        // Memakai created_at karena admin biasanya butuh "pesanan masuk hari X
+        // sampai Y", bukan kapan dibayar.
+        if ($from = $request->string('date_from')->trim()->value()) {
+            try {
+                $q->where('created_at', '>=', \Illuminate\Support\Carbon::parse($from)->startOfDay());
+            } catch (\Throwable) { /* abaikan parse gagal */ }
+        }
+        if ($to = $request->string('date_to')->trim()->value()) {
+            try {
+                $q->where('created_at', '<=', \Illuminate\Support\Carbon::parse($to)->endOfDay());
+            } catch (\Throwable) { /* abaikan parse gagal */ }
+        }
+
+        // Mode export: kembalikan semua hasil yang cocok (tanpa pagination)
+        // supaya tombol "Export Excel" bisa men-download seluruh data sesuai
+        // filter, bukan hanya 20 baris di halaman aktif. Dibatasi 10.000 baris
+        // sebagai pengaman supaya tidak menghabiskan memori PHP.
+        if ($request->boolean('all')) {
+            return response()->json([
+                'data' => $q->latest()->limit(10000)->get(),
+            ]);
+        }
+
         return response()->json($q->latest()->paginate($request->integer('per_page', 20)));
     }
 
