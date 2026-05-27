@@ -37,19 +37,32 @@ export default function ProductDetailPage() {
   }
 
   /**
-   * Beli sekarang: tambahkan ke keranjang lalu langsung loncat ke halaman
-   * checkout. Biar pembeli yang sudah yakin tidak perlu mampir ke keranjang
-   * dulu.
+   * Beli Sekarang: TIDAK menambahkan ke keranjang. Kita simpan info produk
+   * + qty terpilih ke sessionStorage, lalu loncat ke halaman checkout dengan
+   * flag `?buy_now=1`. Halaman checkout akan men-checkout single item ini
+   * saja, terpisah dari keranjang yang sudah ada.
    */
-  async function onBuyNow() {
+  function onBuyNow() {
     if (!user) { router.push('/login'); return; }
     if (!product) return;
-    try {
-      await add(product.id, qty);
-      router.push('/checkout');
-    } catch (e) {
-      toast.error(apiError(e));
+    if (product.stock === 0) return;
+
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('ranco.buyNow', JSON.stringify({
+        product_id: product.id,
+        quantity: qty,
+        // Snapshot ringkas yang dipakai halaman checkout untuk preview
+        // sebelum order benar-benar dibuat di server.
+        _preview: {
+          name: product.name,
+          image: product.images?.[0] ?? null,
+          unit_price: product.selling_price,
+          weight: product.weight,
+          stock: product.stock,
+        },
+      }));
     }
+    router.push('/checkout?buy_now=1');
   }
 
   return (
