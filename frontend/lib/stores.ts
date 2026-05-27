@@ -161,17 +161,31 @@ interface SiteSettingsState {
 }
 
 export const useSiteSettings = create<SiteSettingsState>((set, get) => ({
-  settings: (() => {
-    if (typeof window === 'undefined') return DEFAULT_SETTINGS;
-    try {
-      const raw = localStorage.getItem(SETTINGS_CACHE_KEY);
-      if (raw) return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as SiteSettings) };
-    } catch { /* ignore parse errors, fallback to defaults */ }
-    return DEFAULT_SETTINGS;
-  })(),
+  // PENTING: initial state HARUS deterministik & sama di server maupun client.
+  // Sebelumnya kita baca localStorage di sini, akibatnya server render pakai
+  // DEFAULT_SETTINGS sementara client (saat module di-evaluasi ulang di
+  // browser) langsung pakai versi cache → markup beda → React melempar
+  // "Hydration failed". Hidrasi dari cache dilakukan saat load() dipanggil
+  // dari useEffect (yang otomatis hanya jalan di client setelah mount).
+  settings: DEFAULT_SETTINGS,
   loaded: false,
   async load(force = false) {
     if (!force && get().loaded) return;
+
+    // 1) Pakai cache localStorage dulu kalau ada — supaya UI tidak FOUC saat
+    //    user berpindah halaman (mis. logo "loncat" dari fallback ke logo asli).
+    //    Ini aman dilakukan setelah mount, jadi tidak memicu hydration error.
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = localStorage.getItem(SETTINGS_CACHE_KEY);
+        if (raw) {
+          const cached = { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as SiteSettings) };
+          set({ settings: cached });
+        }
+      } catch { /* ignore parse errors */ }
+    }
+
+    // 2) Refresh dari server di latar belakang.
     try {
       const r = await api.get('/site-settings');
       const data = (r.data?.data ?? null) as SiteSettings | null;
