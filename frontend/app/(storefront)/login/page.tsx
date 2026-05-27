@@ -60,11 +60,6 @@ export default function LoginPage() {
     finally { setLoading(false); }
   }
 
-  function loginWithGoogle() {
-    const api = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-    window.location.href = `${api}/api/auth/google/redirect`;
-  }
-
   return (
     <div className="max-w-md mx-auto px-4 py-10">
       <h1 className="text-2xl font-bold mb-4">Masuk</h1>
@@ -114,21 +109,8 @@ export default function LoginPage() {
           </div>
         )}
 
-        <div className="relative my-2 text-center">
-          <div className="border-t border-gray-200 absolute inset-x-0 top-1/2"/>
-          <span className="relative bg-white px-3 text-xs text-gray-400">atau</span>
-        </div>
-
-        <button onClick={loginWithGoogle} className="btn-outline w-full">
-          Masuk dengan Google
-        </button>
-
         <div className="text-sm text-gray-600 text-center">
           Belum punya akun? <Link href="/register" className="text-brand font-medium">Daftar</Link>
-        </div>
-
-        <div className="text-xs text-gray-400 text-center">
-          Admin? <Link href="/admin/login" className="underline">Masuk di sini</Link>
         </div>
       </div>
     </div>

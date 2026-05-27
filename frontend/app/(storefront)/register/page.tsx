@@ -42,10 +42,10 @@ export default function RegisterPage() {
           <input className="input" placeholder="08xxxxxxxxxx" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
         </div>
         <div><label className="label">Password</label>
-          <input type="password" className="input" required minLength={8} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+          <input type="password" className="input" required minLength={3} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
         </div>
         <div><label className="label">Konfirmasi password</label>
-          <input type="password" className="input" required minLength={8} value={form.password_confirmation} onChange={(e) => setForm({ ...form, password_confirmation: e.target.value })} />
+          <input type="password" className="input" required minLength={3} value={form.password_confirmation} onChange={(e) => setForm({ ...form, password_confirmation: e.target.value })} />
         </div>
         <button disabled={loading} className="btn-primary w-full">{loading ? 'Mendaftar...' : 'Daftar'}</button>
         <div className="text-sm text-gray-600 text-center">

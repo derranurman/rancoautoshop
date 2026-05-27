@@ -22,7 +22,8 @@ class AuthController extends Controller
             'name'     => ['required', 'string', 'max:120'],
             'email'    => ['required', 'email', Rule::unique('users', 'email')],
             'phone'    => ['nullable', 'string', 'max:20', Rule::unique('users', 'phone')],
-            'password' => ['required', 'string', 'min:8', 'confirmed'],
+            // Pelanggan boleh password sependek 3 karakter sesuai permintaan owner toko.
+            'password' => ['required', 'string', 'min:3', 'confirmed'],
         ]);
 
         $user = User::create([
@@ -106,14 +107,19 @@ class AuthController extends Controller
      * "add a phone number for the first time" when the user registered via
      * email/Google, or to rename, etc. Uniqueness is enforced ignoring the
      * current user's row.
+     *
+     * Untuk admin yang ingin ganti email/password login admin, kirim juga
+     * `current_password` dan `password` (+ `password_confirmation`).
      */
     public function updateProfile(Request $request): JsonResponse
     {
         $user = $request->user();
         $data = $request->validate([
-            'name'  => ['sometimes', 'string', 'max:120'],
-            'email' => ['sometimes', 'nullable', 'email', Rule::unique('users', 'email')->ignore($user->id)],
-            'phone' => ['sometimes', 'nullable', 'string', 'regex:/^\+?\d{8,15}$/', Rule::unique('users', 'phone')->ignore($user->id)],
+            'name'             => ['sometimes', 'string', 'max:120'],
+            'email'            => ['sometimes', 'nullable', 'email', Rule::unique('users', 'email')->ignore($user->id)],
+            'phone'            => ['sometimes', 'nullable', 'string', 'regex:/^\+?\d{8,15}$/', Rule::unique('users', 'phone')->ignore($user->id)],
+            'current_password' => ['sometimes', 'required_with:password', 'string'],
+            'password'         => ['sometimes', 'string', 'min:3', 'confirmed'],
         ]);
 
         if (array_key_exists('phone', $data) && $data['phone']) {
@@ -124,6 +130,19 @@ class AuthController extends Controller
                 throw ValidationException::withMessages(['phone' => 'Nomor HP sudah digunakan.']);
             }
         }
+
+        // Password change requires the user to verify their current password.
+        if (! empty($data['password'])) {
+            if (empty($data['current_password']) || ! Hash::check($data['current_password'], (string) $user->password)) {
+                throw ValidationException::withMessages([
+                    'current_password' => 'Password lama tidak sesuai.',
+                ]);
+            }
+            $user->password = Hash::make($data['password']);
+        }
+
+        // current_password & password are not column attributes on the model.
+        unset($data['current_password'], $data['password']);
 
         $user->fill($data)->save();
 
