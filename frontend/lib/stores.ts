@@ -84,7 +84,7 @@ interface CartState {
   cart: Cart | null;
   loading: boolean;
   fetch: () => Promise<void>;
-  add: (productId: number, qty?: number) => Promise<void>;
+  add: (productId: number, qty?: number, variantId?: number | null) => Promise<void>;
   updateItem: (itemId: number, qty: number) => Promise<void>;
   removeItem: (itemId: number) => Promise<void>;
   clear: () => Promise<void>;
@@ -101,8 +101,10 @@ export const useCart = create<CartState>((set) => ({
       set({ cart: res.data });
     } finally { set({ loading: false }); }
   },
-  async add(productId, qty = 1) {
-    const res = await api.post('/cart/items', { product_id: productId, quantity: qty });
+  async add(productId, qty = 1, variantId = null) {
+    const payload: Record<string, unknown> = { product_id: productId, quantity: qty };
+    if (variantId) payload.variant_id = variantId;
+    const res = await api.post('/cart/items', payload);
     set({ cart: res.data });
   },
   async updateItem(itemId, qty) {
@@ -142,6 +144,14 @@ const DEFAULT_SETTINGS: SiteSettings = {
   whatsapp_greeting: 'Halo! Ada yang bisa kami bantu seputar produk Ranco Autoshop?',
   whatsapp_prefilled_text: 'Halo Admin Ranco, saya ingin bertanya tentang produk.',
   whatsapp_link: null,
+
+  // Bank rekening transfer manual — default off / kosong sampai admin mengisi.
+  manual_transfer_enabled: false,
+  bank_name: null,
+  bank_account_number: null,
+  bank_account_holder: null,
+  bank_branch: null,
+  bank_extra_note: null,
 };
 
 const SETTINGS_CACHE_KEY = 'ranco.siteSettings';

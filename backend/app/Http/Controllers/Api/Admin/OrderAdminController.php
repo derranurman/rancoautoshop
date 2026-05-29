@@ -5,9 +5,12 @@ namespace App\Http\Controllers\Api\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Models\OrderTrackingEvent;
+use App\Models\Product;
+use App\Models\ProductVariant;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 
 class OrderAdminController extends Controller
@@ -55,7 +58,7 @@ class OrderAdminController extends Controller
     public function show(Order $order): JsonResponse
     {
         return response()->json([
-            'data' => $order->load(['user', 'items.product', 'trackingEvents']),
+            'data' => $order->load(['user', 'items.product', 'items.variant', 'trackingEvents']),
         ]);
     }
 
@@ -79,6 +82,22 @@ class OrderAdminController extends Controller
             if ($data['status'] === Order::STATUS_PAID && ! $order->paid_at) {
                 $patch['paid_at'] = now();
             }
+            // Kalau admin meng-cancel order, kembalikan stok produk/varian
+            // (cermin perilaku OrderController::cancel di sisi customer).
+            if ($data['status'] === Order::STATUS_CANCELLED && $order->status !== Order::STATUS_CANCELLED) {
+                foreach ($order->items as $item) {
+                    if ($item->variant_id) {
+                        ProductVariant::where('id', $item->variant_id)->increment('stock', $item->quantity);
+                        if ($item->product_id) {
+                            $newTotal = (int) ProductVariant::where('product_id', $item->product_id)
+                                ->where('is_active', true)->sum('stock');
+                            Product::where('id', $item->product_id)->update(['stock' => $newTotal]);
+                        }
+                    } elseif ($item->product_id) {
+                        Product::where('id', $item->product_id)->increment('stock', $item->quantity);
+                    }
+                }
+            }
             $order->update($patch);
 
             // Build a friendly default note based on the new status.
@@ -101,6 +120,90 @@ class OrderAdminController extends Controller
                 $note,
                 OrderTrackingEvent::SOURCE_ADMIN,
                 $data['location'] ?? null,
+            );
+        });
+
+        return response()->json([
+            'data' => $order->fresh(['items', 'trackingEvents']),
+        ]);
+    }
+
+    /**
+     * Approve bukti transfer manual: order pindah ke `paid` + paid_at = now.
+     * Hanya valid kalau order sedang `awaiting_verification` dengan metode manual.
+     */
+    public function approvePayment(Request $request, Order $order): JsonResponse
+    {
+        abort_unless(
+            $order->payment_method === Order::PAYMENT_METHOD_MANUAL_TRANSFER,
+            422,
+            'Pesanan ini bukan pembayaran transfer manual.'
+        );
+        abort_unless(
+            $order->status === Order::STATUS_AWAITING_VERIFICATION,
+            422,
+            'Status pesanan tidak siap untuk diverifikasi.'
+        );
+        abort_unless($order->payment_proof_url, 422, 'Bukti transfer belum diunggah.');
+
+        DB::transaction(function () use ($request, $order) {
+            $order->update([
+                'status'              => Order::STATUS_PAID,
+                'paid_at'             => now(),
+                'payment_verified_by' => $request->user()->id,
+                'payment_verified_at' => now(),
+                'payment_rejection_reason' => null,
+            ]);
+            $order->addTrackingEvent(
+                Order::STATUS_PAID,
+                'Pembayaran transfer manual diverifikasi oleh admin.',
+                OrderTrackingEvent::SOURCE_ADMIN,
+            );
+        });
+
+        return response()->json([
+            'data' => $order->fresh(['items', 'trackingEvents']),
+        ]);
+    }
+
+    /**
+     * Reject bukti transfer: status balik ke `pending`, file bukti dihapus, alasan dicatat.
+     * Customer akan melihat alasan + diberi kesempatan upload ulang.
+     */
+    public function rejectPayment(Request $request, Order $order): JsonResponse
+    {
+        $data = $request->validate([
+            'reason' => ['required', 'string', 'max:500'],
+        ]);
+
+        abort_unless(
+            $order->payment_method === Order::PAYMENT_METHOD_MANUAL_TRANSFER,
+            422,
+            'Pesanan ini bukan pembayaran transfer manual.'
+        );
+        abort_unless(
+            $order->status === Order::STATUS_AWAITING_VERIFICATION,
+            422,
+            'Status pesanan tidak siap untuk ditolak.'
+        );
+
+        DB::transaction(function () use ($order, $data) {
+            // Hapus file bukti supaya tidak menumpuk dan agar customer harus
+            // mengunggah ulang.
+            if ($order->payment_proof_url && str_starts_with($order->payment_proof_url, '/storage/')) {
+                $rel = substr($order->payment_proof_url, strlen('/storage/'));
+                try { Storage::disk('public')->delete($rel); } catch (\Throwable) {}
+            }
+            $order->update([
+                'status'                    => Order::STATUS_PENDING,
+                'payment_proof_url'         => null,
+                'payment_proof_uploaded_at' => null,
+                'payment_rejection_reason'  => $data['reason'],
+            ]);
+            $order->addTrackingEvent(
+                Order::STATUS_PENDING,
+                'Bukti transfer ditolak admin: '.$data['reason'],
+                OrderTrackingEvent::SOURCE_ADMIN,
             );
         });
 

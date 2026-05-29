@@ -70,6 +70,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/orders/{orderNumber}/cancel', [OrderController::class, 'cancel']);
         Route::post('/orders/{orderNumber}/repay',  [OrderController::class, 'repay']);
         Route::post('/orders/{orderNumber}/sync-status', [OrderController::class, 'syncStatus']);
+        // Upload bukti transfer untuk pembayaran manual
+        Route::post('/orders/{orderNumber}/payment-proof', [OrderController::class, 'uploadPaymentProof']);
     });
 
     // Admin-only
@@ -87,6 +89,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/orders/{order}',        [OrderAdminController::class, 'show']);
         Route::patch('/orders/{order}/status', [OrderAdminController::class, 'updateStatus']);
         Route::post('/orders/{order}/tracking', [OrderAdminController::class, 'addTrackingEvent']);
+        // Verifikasi pembayaran transfer manual
+        Route::post('/orders/{order}/approve-payment', [OrderAdminController::class, 'approvePayment']);
+        Route::post('/orders/{order}/reject-payment',  [OrderAdminController::class, 'rejectPayment']);
 
         Route::get('/users',                 [UserAdminController::class, 'index']);
         Route::post('/users',                [UserAdminController::class, 'store']);

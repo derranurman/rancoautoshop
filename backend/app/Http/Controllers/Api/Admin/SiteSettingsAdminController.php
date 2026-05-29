@@ -51,6 +51,14 @@ class SiteSettingsAdminController extends Controller
             'whatsapp_label'          => ['sometimes', 'string', 'max:80'],
             'whatsapp_greeting'       => ['sometimes', 'string', 'max:240'],
             'whatsapp_prefilled_text' => ['sometimes', 'string', 'max:240'],
+
+            // Bank rekening untuk pembayaran transfer manual.
+            'manual_transfer_enabled' => ['sometimes', 'boolean'],
+            'bank_name'               => ['sometimes', 'nullable', 'string', 'max:80'],
+            'bank_account_number'     => ['sometimes', 'nullable', 'string', 'max:60'],
+            'bank_account_holder'     => ['sometimes', 'nullable', 'string', 'max:120'],
+            'bank_branch'             => ['sometimes', 'nullable', 'string', 'max:120'],
+            'bank_extra_note'         => ['sometimes', 'nullable', 'string', 'max:1000'],
         ]);
 
         $s = SiteSetting::current();
