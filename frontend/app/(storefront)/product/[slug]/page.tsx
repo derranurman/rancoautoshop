@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { api, apiError, formatRupiah } from '@/lib/api';
-import { useAuth, useCart } from '@/lib/stores';
+import { useAuth, useCart, useSiteSettings } from '@/lib/stores';
 import type { Product, ProductVariant } from '@/lib/types';
 
 export default function ProductDetailPage() {
@@ -15,6 +15,7 @@ export default function ProductDetailPage() {
   const [selectedVariantId, setSelectedVariantId] = useState<number | null>(null);
   const { user } = useAuth();
   const { add } = useCart();
+  const settings = useSiteSettings((s) => s.settings);
 
   useEffect(() => {
     api.get(`/products/${slug}`).then((r) => {
@@ -111,6 +112,14 @@ export default function ProductDetailPage() {
   const isBuyDisabled =
     displayStock === 0 || (product.has_variants && !selectedVariantId);
 
+  // Threshold "stok tinggal sedikit" — per produk override dulu, kalau null
+  // pakai default global toko.
+  const lowThreshold =
+    typeof product.low_stock_threshold === 'number' && product.low_stock_threshold > 0
+      ? product.low_stock_threshold
+      : settings.low_stock_threshold ?? 5;
+  const isLowStock = displayStock > 0 && displayStock <= lowThreshold;
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 grid md:grid-cols-2 gap-6">
       <div>
@@ -122,11 +131,22 @@ export default function ProductDetailPage() {
         <h1 className="text-2xl font-bold">{product.name}</h1>
         <div className="text-3xl font-bold text-brand">{formatRupiah(displayPrice)}</div>
         <div className="text-sm text-gray-500">
-          Stok: {displayStock} · Berat: {selectedVariant?.weight ?? product.weight} gr
+          Stok: <span className={isLowStock ? 'text-amber-600 font-semibold' : ''}>{displayStock}</span> · Berat: {selectedVariant?.weight ?? product.weight} gr
           {selectedVariant?.sku && (
             <span className="ml-2 text-xs text-gray-400">SKU: {selectedVariant.sku}</span>
           )}
         </div>
+        {isLowStock && (
+          <div className="inline-flex items-center gap-1.5 text-xs font-medium bg-amber-50 border border-amber-200 text-amber-800 px-2 py-1 rounded">
+            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+            Stok hampir habis — tinggal {displayStock} unit, segera order!
+          </div>
+        )}
+        {displayStock === 0 && (
+          <div className="inline-flex items-center gap-1.5 text-xs font-medium bg-red-50 border border-red-200 text-red-800 px-2 py-1 rounded">
+            Stok habis. Hubungi admin via WhatsApp untuk pre-order.
+          </div>
+        )}
         <p className="text-gray-700 whitespace-pre-line">{product.description}</p>
 
         {/* ---------------- Variant picker ---------------- */}

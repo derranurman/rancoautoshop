@@ -60,7 +60,9 @@ export default function OrderDetailPage() {
   useEffect(() => {
     (async () => {
       const o = await load();
-      if (o.status === 'pending' && o.payment_method !== 'manual_transfer') {
+      if (o.status === 'pending'
+          && o.payment_method !== 'manual_transfer'
+          && o.payment_method !== 'cod') {
         await sync();
       }
     })();
@@ -73,7 +75,8 @@ export default function OrderDetailPage() {
   useEffect(() => {
     const isMidtransPending = order
       && order.status === 'pending'
-      && order.payment_method !== 'manual_transfer';
+      && order.payment_method !== 'manual_transfer'
+      && order.payment_method !== 'cod';
     if (!isMidtransPending) {
       if (pollRef.current) {
         clearInterval(pollRef.current);
@@ -188,6 +191,7 @@ export default function OrderDetailPage() {
   if (!order) return <div className="max-w-3xl mx-auto px-4 py-10 text-gray-500">Memuat...</div>;
 
   const isManualTransfer = order.payment_method === 'manual_transfer';
+  const isCOD = order.payment_method === 'cod';
   const isPending = order.status === 'pending';
   const isAwaitingVerification = order.status === 'awaiting_verification';
   const canCancel = isPending || isAwaitingVerification;
@@ -220,7 +224,7 @@ export default function OrderDetailPage() {
       />
 
       {/* -------- Midtrans CTA (hanya untuk order pembayaran online) -------- */}
-      {!isManualTransfer && isPending && (
+      {!isManualTransfer && !isCOD && isPending && (
         <div className="card p-4 border-brand bg-brand/5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
@@ -243,6 +247,24 @@ export default function OrderDetailPage() {
           <div className="mt-2 text-xs text-gray-500">
             Total yang harus dibayar: <b>{formatRupiah(order.total)}</b>
             <span className="ml-2">· Status diperiksa otomatis tiap 5 detik.</span>
+          </div>
+        </div>
+      )}
+
+      {/* -------- COD: info & ekspektasi pembayaran -------- */}
+      {isCOD && isPending && (
+        <div className="card p-4 border-amber-300 bg-amber-50 space-y-2">
+          <div>
+            <div className="font-semibold text-amber-900">Pesanan Bayar di Tempat (COD)</div>
+            <div className="text-sm text-amber-800">
+              Pembayaran tunai sebesar <b>{formatRupiah(order.total)}</b> dilakukan
+              langsung ke kurir saat barang sampai. Tidak perlu transfer.
+            </div>
+          </div>
+          <div className="text-xs text-amber-800/80 bg-white/60 rounded p-2">
+            Pastikan ada penerima di alamat tujuan dan siapkan uang pas. Kalau alamat
+            salah atau kurir tidak bisa menemui penerima, pesanan COD dapat
+            dibatalkan/dikembalikan oleh kurir.
           </div>
         </div>
       )}

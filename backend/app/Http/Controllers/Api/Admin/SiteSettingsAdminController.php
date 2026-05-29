@@ -59,6 +59,23 @@ class SiteSettingsAdminController extends Controller
             'bank_account_holder'     => ['sometimes', 'nullable', 'string', 'max:120'],
             'bank_branch'             => ['sometimes', 'nullable', 'string', 'max:120'],
             'bank_extra_note'         => ['sometimes', 'nullable', 'string', 'max:1000'],
+
+            // COD
+            'cod_enabled'             => ['sometimes', 'boolean'],
+            'cod_min_total'           => ['sometimes', 'nullable', 'integer', 'min:0'],
+            'cod_max_total'           => ['sometimes', 'nullable', 'integer', 'min:0'],
+            'cod_extra_fee'           => ['sometimes', 'nullable', 'integer', 'min:0'],
+            'cod_extra_note'          => ['sometimes', 'nullable', 'string', 'max:1000'],
+
+            // Sender (untuk label pengiriman)
+            'sender_name'             => ['sometimes', 'nullable', 'string', 'max:120'],
+            'sender_phone'            => ['sometimes', 'nullable', 'string', 'max:30'],
+            'sender_address'          => ['sometimes', 'nullable', 'string', 'max:500'],
+            'sender_city'             => ['sometimes', 'nullable', 'string', 'max:120'],
+            'sender_postal_code'      => ['sometimes', 'nullable', 'string', 'max:10'],
+
+            // Default global low-stock threshold.
+            'low_stock_threshold'     => ['sometimes', 'integer', 'min:0', 'max:1000'],
         ]);
 
         $s = SiteSetting::current();

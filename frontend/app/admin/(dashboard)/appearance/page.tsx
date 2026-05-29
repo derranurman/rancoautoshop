@@ -84,6 +84,12 @@ export default function AdminAppearancePage() {
         bank_account_holder: fresh.bank_account_holder ?? null,
         bank_branch: fresh.bank_branch ?? null,
         bank_extra_note: fresh.bank_extra_note ?? null,
+        cod_enabled: fresh.cod_enabled ?? false,
+        cod_min_total: fresh.cod_min_total ?? 0,
+        cod_max_total: fresh.cod_max_total ?? null,
+        cod_extra_fee: fresh.cod_extra_fee ?? 0,
+        cod_extra_note: fresh.cod_extra_note ?? null,
+        low_stock_threshold: fresh.low_stock_threshold ?? 5,
       };
       replaceSettings(publicShape);
 
@@ -434,6 +440,169 @@ export default function AdminAppearancePage() {
               )}
             </div>
           )}
+        </section>
+
+        {/* ------------- COD ------------- */}
+        <section className="card p-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="font-semibold">Bayar di Tempat (COD)</h2>
+              <p className="text-xs text-gray-500">
+                Aktifkan agar customer bisa memilih COD di checkout. Pembayaran tunai
+                ke kurir saat barang diterima. Sesuaikan rentang nominal dengan
+                kebijakan kurir partnermu.
+              </p>
+            </div>
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.cod_enabled}
+                onChange={(e) => patch('cod_enabled', e.target.checked)}
+              />
+              Aktifkan
+            </label>
+          </div>
+
+          <div className="grid sm:grid-cols-3 gap-3">
+            <div>
+              <label className="label">Min Total (Rp)</label>
+              <input
+                type="number"
+                min={0}
+                className="input"
+                placeholder="0"
+                value={form.cod_min_total ?? 0}
+                onChange={(e) => patch('cod_min_total', +e.target.value || 0)}
+              />
+            </div>
+            <div>
+              <label className="label">Max Total (Rp)</label>
+              <input
+                type="number"
+                min={0}
+                className="input"
+                placeholder="kosong = tidak ada batas"
+                value={form.cod_max_total ?? ''}
+                onChange={(e) => patch('cod_max_total', e.target.value === '' ? null : +e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="label">Biaya Layanan COD (Rp)</label>
+              <input
+                type="number"
+                min={0}
+                className="input"
+                placeholder="0"
+                value={form.cod_extra_fee ?? 0}
+                onChange={(e) => patch('cod_extra_fee', +e.target.value || 0)}
+              />
+              <div className="text-[11px] text-gray-500 mt-0.5">
+                Ditambahkan ke total checkout COD (jika &gt; 0).
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label className="label">Catatan COD untuk Pelanggan (opsional)</label>
+            <textarea
+              className="input"
+              rows={2}
+              value={form.cod_extra_note ?? ''}
+              onChange={(e) => patch('cod_extra_note', e.target.value || null)}
+              placeholder="Cth: COD hanya tersedia untuk Jabodetabek. Pastikan ada penerima di alamat."
+              maxLength={1000}
+            />
+          </div>
+        </section>
+
+        {/* ------------- Sender (untuk Label Pengiriman) ------------- */}
+        <section className="card p-4 space-y-4">
+          <div>
+            <h2 className="font-semibold">Identitas Pengirim (untuk Label Pengiriman)</h2>
+            <p className="text-xs text-gray-500">
+              Dipakai sebagai info &ldquo;Pengirim&rdquo; di label pengiriman PDF.
+              Lengkapi sebelum cetak label pertama.
+            </p>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div>
+              <label className="label">Nama Pengirim / Toko</label>
+              <input
+                className="input"
+                value={form.sender_name ?? ''}
+                onChange={(e) => patch('sender_name', e.target.value || null)}
+                placeholder="Cth: Ranco Autoshop"
+                maxLength={120}
+              />
+            </div>
+            <div>
+              <label className="label">No HP Pengirim</label>
+              <input
+                className="input"
+                value={form.sender_phone ?? ''}
+                onChange={(e) => patch('sender_phone', e.target.value || null)}
+                placeholder="Cth: 08123456789"
+                maxLength={30}
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="label">Alamat Pengirim</label>
+              <textarea
+                className="input"
+                rows={2}
+                value={form.sender_address ?? ''}
+                onChange={(e) => patch('sender_address', e.target.value || null)}
+                placeholder="Jl. Contoh No. 123, RT 01/RW 02"
+                maxLength={500}
+              />
+            </div>
+            <div>
+              <label className="label">Kota</label>
+              <input
+                className="input"
+                value={form.sender_city ?? ''}
+                onChange={(e) => patch('sender_city', e.target.value || null)}
+                placeholder="Cth: Jakarta Selatan"
+                maxLength={120}
+              />
+            </div>
+            <div>
+              <label className="label">Kode Pos</label>
+              <input
+                className="input"
+                value={form.sender_postal_code ?? ''}
+                onChange={(e) => patch('sender_postal_code', e.target.value || null)}
+                placeholder="12345"
+                maxLength={10}
+              />
+            </div>
+          </div>
+        </section>
+
+        {/* ------------- Stok / Inventory ------------- */}
+        <section className="card p-4 space-y-3">
+          <div>
+            <h2 className="font-semibold">Inventory</h2>
+            <p className="text-xs text-gray-500">
+              Pengaturan threshold stok minimum sebelum produk diberi label
+              &ldquo;hampir habis&rdquo; di storefront.
+            </p>
+          </div>
+          <div>
+            <label className="label">Threshold Stok Hampir Habis (Default)</label>
+            <input
+              type="number"
+              min={0}
+              max={1000}
+              className="input max-w-[200px]"
+              value={form.low_stock_threshold ?? 5}
+              onChange={(e) => patch('low_stock_threshold', +e.target.value)}
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Saat stok produk ≤ angka ini, label &ldquo;Tinggal X&rdquo; muncul di card &amp; detail.
+              Per-produk override bisa diatur dari halaman edit produk.
+            </p>
+          </div>
         </section>
 
         <div className="flex justify-end">

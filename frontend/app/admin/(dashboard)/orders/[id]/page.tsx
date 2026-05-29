@@ -10,6 +10,9 @@ import { PackageTracker } from '@/components/PackageTracker';
 import { courierLabel } from '@/lib/couriers';
 
 const NEXT_STATUS: Record<string, string[]> = {
+  // Untuk COD, izinkan pending → packed langsung (admin tidak perlu confirm
+  // payment dulu karena pembayaran terjadi saat barang sampai). Frontend pakai
+  // `payment_method === 'cod'` untuk men-overlay opsi tambahan ini.
   pending:               ['paid', 'cancelled'],
   awaiting_verification: ['paid', 'pending', 'cancelled'],
   paid:                  ['packed', 'cancelled'],
@@ -17,6 +20,12 @@ const NEXT_STATUS: Record<string, string[]> = {
   shipped:               ['delivered'],
   delivered:             [],
   cancelled:             [],
+};
+
+/** Untuk order COD, transisi pending → packed langsung diizinkan. */
+const COD_NEXT_STATUS: Record<string, string[]> = {
+  ...NEXT_STATUS,
+  pending: ['packed', 'cancelled'],
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -114,14 +123,55 @@ export default function AdminOrderDetailPage() {
 
   if (!order) return <div className="text-gray-500">Memuat...</div>;
 
-  const transitions = NEXT_STATUS[order.status] ?? [];
+  const transitions = (order.payment_method === 'cod'
+    ? COD_NEXT_STATUS[order.status]
+    : NEXT_STATUS[order.status]) ?? [];
 
   return (
     <div className="space-y-4 max-w-3xl">
-      <h1 className="text-2xl font-bold">Order {order.order_number}</h1>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <h1 className="text-2xl font-bold">Order {order.order_number}</h1>
+        <a
+          href={`/admin/orders/${id}/label`}
+          target="_blank"
+          rel="noreferrer"
+          className="btn-outline text-sm"
+          title={order.tracking_number
+            ? 'Buka halaman label pengiriman, lalu Cetak (Ctrl/Cmd + P) atau Save as PDF'
+            : 'Resi belum diisi — label akan dicetak tanpa nomor resi & tanpa barcode'}
+        >
+          Cetak Label{!order.tracking_number && ' ⚠'}
+        </a>
+      </div>
+
+      {/* Reminder kalau status sudah shipped tapi resi masih kosong — kasus
+          paling sering admin lupa input AWB sebelum cetak label. */}
+      {!order.tracking_number && order.status !== 'pending' && order.status !== 'cancelled' && (
+        <div className="card p-3 bg-yellow-50 border-yellow-300 text-sm text-yellow-900">
+          ⚠ Pesanan ini belum punya nomor resi kurir. Pesan jemputan ke {courierLabel(order.courier)},
+          dapatkan nomor resi (mis. <span className="font-mono">JX9481926078</span> untuk J&amp;T atau{' '}
+          <span className="font-mono">CGKDA00012345678</span> untuk JNE), lalu input di field <b>Nomor Resi</b> di bawah.
+        </div>
+      )}
 
       <div className="card p-4 text-sm space-y-1">
-        <div className="flex justify-between"><span>Status saat ini</span><b>{STATUS_LABEL[order.status] ?? order.status}</b></div>
+        <div className="flex justify-between">
+          <span>Status saat ini</span>
+          <b>{STATUS_LABEL[order.status] ?? order.status}</b>
+        </div>
+        <div className="flex justify-between">
+          <span>Metode Pembayaran</span>
+          <span className={[
+            'text-xs font-semibold uppercase tracking-wide rounded px-2 py-0.5',
+            order.payment_method === 'cod' ? 'bg-amber-100 text-amber-800' :
+            order.payment_method === 'manual_transfer' ? 'bg-blue-100 text-blue-800' :
+            'bg-gray-100 text-gray-700',
+          ].join(' ')}>
+            {order.payment_method === 'cod' ? 'COD'
+              : order.payment_method === 'manual_transfer' ? 'Transfer Manual'
+              : 'Midtrans'}
+          </span>
+        </div>
         <div className="flex justify-between"><span>Penerima</span><span>{order.recipient_name} — {order.recipient_phone}</span></div>
         <div className="whitespace-pre-line text-gray-600">{order.shipping_address}</div>
         {order.tracking_number && (
@@ -264,8 +314,21 @@ export default function AdminOrderDetailPage() {
         <h2 className="font-semibold">Update Status</h2>
         <div>
           <label className="label">Nomor Resi ({courierLabel(order.courier)} {order.courier_service})</label>
-          <input className="input" placeholder="Masukkan no resi kurir" value={tracking}
-                 onChange={(e) => setTracking(e.target.value)} />
+          <input
+            className="input font-mono"
+            placeholder={
+              order.courier === 'jnt' ? 'cth: JX9481926078'
+              : order.courier === 'jne' ? 'cth: CGKDA00012345678'
+              : order.courier === 'pos' ? 'cth: 16001234567890'
+              : 'Masukkan no resi dari kurir'
+            }
+            value={tracking}
+            onChange={(e) => setTracking(e.target.value.trim())}
+          />
+          <div className="text-xs text-gray-500 mt-1">
+            Resi ini akan tampil di halaman pesanan customer (untuk track paket) &amp; di label pengiriman.
+            Pastikan persis seperti yang diberikan kurir — typo bikin tracking gagal.
+          </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>

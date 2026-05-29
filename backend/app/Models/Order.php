@@ -22,6 +22,7 @@ class Order extends Model
 
     public const PAYMENT_METHOD_MIDTRANS        = 'midtrans';
     public const PAYMENT_METHOD_MANUAL_TRANSFER = 'manual_transfer';
+    public const PAYMENT_METHOD_COD             = 'cod';
 
     /** Human-readable Indonesian label per status. */
     public const STATUS_LABELS = [

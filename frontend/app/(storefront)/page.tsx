@@ -1,22 +1,42 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import type { Category, Product } from '@/lib/types';
 import ProductCard from '@/components/ProductCard';
 import { useSiteSettings } from '@/lib/stores';
 
 export default function HomePage() {
+  // useSearchParams butuh Suspense boundary saat build (Next.js App Router).
+  return (
+    <Suspense fallback={<div className="max-w-6xl mx-auto px-4 py-10 text-gray-500">Memuat...</div>}>
+      <HomeInner />
+    </Suspense>
+  );
+}
+
+function HomeInner() {
+  const searchParams = useSearchParams();
   const [products, setProducts] = useState<Product[]>([]);
   const [cats, setCats] = useState<Category[]>([]);
   const [activeCat, setActiveCat] = useState<string>('');
-  const [search, setSearch] = useState('');
+  // Inisialisasi `search` dari ?search=... di URL — supaya saat user pencet
+  // Enter di Navbar autocomplete dan landing ke homepage, query langsung ke-apply.
+  const [search, setSearch] = useState(() => searchParams?.get('search') ?? '');
   const [loading, setLoading] = useState(true);
   const settings = useSiteSettings((s) => s.settings);
 
   useEffect(() => {
     api.get('/categories').then((r) => setCats(r.data.data));
   }, []);
+
+  // Sinkron state lokal kalau query string berubah (mis. user klik link search
+  // lain dari halaman manapun).
+  useEffect(() => {
+    const s = searchParams?.get('search') ?? '';
+    setSearch(s);
+  }, [searchParams]);
 
   useEffect(() => {
     setLoading(true);
@@ -28,8 +48,6 @@ export default function HomePage() {
       .finally(() => setLoading(false));
   }, [activeCat, search]);
 
-  // Inline style override: kalau admin set warna gradient hero, pakai itu.
-  // Kalau salah satu null, fallback ke kelas Tailwind brand default.
   const heroStyle =
     settings.hero_gradient_from && settings.hero_gradient_to
       ? {
@@ -69,6 +87,23 @@ export default function HomePage() {
           </button>
         ))}
       </div>
+
+      {/* Header kecil untuk hasil pencarian — tampil hanya kalau `search` aktif. */}
+      {search && !loading && (
+        <div className="mt-3 text-sm text-gray-600">
+          {products.length === 0
+            ? <>Tidak ada hasil untuk <b>&ldquo;{search}&rdquo;</b>.</>
+            : <>Menampilkan {products.length} hasil untuk <b>&ldquo;{search}&rdquo;</b>.</>
+          }{' '}
+          <button
+            type="button"
+            onClick={() => setSearch('')}
+            className="text-brand hover:underline ml-1"
+          >
+            Reset pencarian
+          </button>
+        </div>
+      )}
 
       <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
         {loading ? (

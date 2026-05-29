@@ -152,6 +152,15 @@ const DEFAULT_SETTINGS: SiteSettings = {
   bank_account_holder: null,
   bank_branch: null,
   bank_extra_note: null,
+
+  // COD default off
+  cod_enabled: false,
+  cod_min_total: 0,
+  cod_max_total: null,
+  cod_extra_fee: 0,
+  cod_extra_note: null,
+
+  low_stock_threshold: 5,
 };
 
 const SETTINGS_CACHE_KEY = 'ranco.siteSettings';

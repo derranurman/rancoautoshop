@@ -37,6 +37,20 @@ class SiteSetting extends Model
         'bank_account_holder',
         'bank_branch',
         'bank_extra_note',
+        // COD
+        'cod_enabled',
+        'cod_min_total',
+        'cod_max_total',
+        'cod_extra_fee',
+        'cod_extra_note',
+        // Sender (untuk label pengiriman PDF)
+        'sender_name',
+        'sender_phone',
+        'sender_address',
+        'sender_city',
+        'sender_postal_code',
+        // Low-stock global
+        'low_stock_threshold',
     ];
 
     protected $appends = [
@@ -49,6 +63,11 @@ class SiteSetting extends Model
         return [
             'whatsapp_enabled'        => 'boolean',
             'manual_transfer_enabled' => 'boolean',
+            'cod_enabled'             => 'boolean',
+            'cod_min_total'           => 'integer',
+            'cod_max_total'           => 'integer',
+            'cod_extra_fee'           => 'integer',
+            'low_stock_threshold'     => 'integer',
         ];
     }
 
@@ -89,6 +108,21 @@ class SiteSetting extends Model
             'bank_account_holder'     => $this->bank_account_holder,
             'bank_branch'             => $this->bank_branch,
             'bank_extra_note'         => $this->bank_extra_note,
+
+            // COD: hanya field yang aman untuk publik. Min/max & extra_fee
+            // memang perlu dilihat customer di checkout supaya transparan.
+            'cod_enabled'             => (bool) $this->cod_enabled,
+            'cod_min_total'           => (int) $this->cod_min_total,
+            'cod_max_total'           => $this->cod_max_total !== null ? (int) $this->cod_max_total : null,
+            'cod_extra_fee'           => (int) $this->cod_extra_fee,
+            'cod_extra_note'          => $this->cod_extra_note,
+
+            // Threshold global untuk indikator "stok hampir habis" di storefront.
+            'low_stock_threshold'     => (int) ($this->low_stock_threshold ?: 5),
+
+            // Sender info SENGAJA tidak diekspos di endpoint publik — itu
+            // alamat gudang admin yang tidak relevan ke storefront. Diakses
+            // hanya dari endpoint admin / halaman label.
         ];
     }
 

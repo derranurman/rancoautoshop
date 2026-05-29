@@ -3,15 +3,18 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
+import * as XLSX from 'xlsx';
 import { api, apiError, formatRupiah } from '@/lib/api';
+import { useSiteSettings } from '@/lib/stores';
 import type { Category } from '@/lib/types';
 
 interface AdminProduct {
   id: number; name: string; slug: string;
   price: number; operational_cost: number;
-  /** Harga jual = price + operational_cost (yang dilihat pelanggan). */
   selling_price?: number;
-  stock: number; weight: number; is_active: boolean;
+  stock: number;
+  low_stock_threshold?: number | null;
+  weight: number; is_active: boolean;
   category?: { id: number; name: string; slug: string } | null;
 }
 
@@ -23,14 +26,17 @@ function pct(c: Category): number {
 }
 
 export default function AdminProductsPage() {
+  const settings = useSiteSettings((s) => s.settings);
   const [products, setProducts] = useState<AdminProduct[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<number | ''>('');
+  const [stockFilter, setStockFilter] = useState<'' | 'low' | 'out'>('');
   const [loading, setLoading] = useState(true);
 
   const [showManageCategoriesModal, setShowManageCategoriesModal] = useState(false);
   const [showOpsCostModal, setShowOpsCostModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
 
   async function loadCategories() {
     try {
@@ -59,6 +65,56 @@ export default function AdminProductsPage() {
   useEffect(() => { loadCategories(); }, []);
   useEffect(() => { loadProducts(); /* eslint-disable-next-line */ }, [search, categoryFilter]);
 
+  // Effective threshold lookup: pakai per-produk kalau ada, kalau tidak global.
+  function effectiveThreshold(p: AdminProduct): number {
+    if (typeof p.low_stock_threshold === 'number' && p.low_stock_threshold > 0) {
+      return p.low_stock_threshold;
+    }
+    return settings.low_stock_threshold ?? 5;
+  }
+
+  // Filter low/out di sisi client supaya sederhana — daftar produk admin
+  // jarang lebih dari 1000 row, jadi paginasi server tidak diperlukan untuk
+  // filter ini. Search & kategori tetap server-side.
+  const filteredProducts = (() => {
+    if (stockFilter === '') return products;
+    return products.filter((p) => {
+      const t = effectiveThreshold(p);
+      if (stockFilter === 'out') return p.stock <= 0;
+      if (stockFilter === 'low') return p.stock > 0 && p.stock <= t;
+      return true;
+    });
+  })();
+
+  async function exportXlsx() {
+    try {
+      const r = await api.get('/admin/products/export', {
+        params: {
+          search: search || undefined,
+          category_id: categoryFilter || undefined,
+        },
+      });
+      const rows = (r.data?.data ?? []) as Record<string, unknown>[];
+      if (rows.length === 0) {
+        toast.error('Tidak ada produk untuk diekspor.');
+        return;
+      }
+      const ws = XLSX.utils.json_to_sheet(rows);
+      // Auto-width kolom ringan
+      const headers = Object.keys(rows[0]);
+      ws['!cols'] = headers.map((h) => ({
+        wch: Math.min(40, Math.max(h.length, ...rows.map((row) => String(row[h] ?? '').length)) + 2),
+      }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Produk');
+      const stamp = new Date().toISOString().slice(0, 10);
+      XLSX.writeFile(wb, `produk_${stamp}.xlsx`);
+      toast.success(`${rows.length} produk diekspor.`);
+    } catch (e) {
+      toast.error(apiError(e));
+    }
+  }
+
   async function remove(p: AdminProduct) {
     if (!confirm(`Hapus ${p.name}?`)) return;
     try {
@@ -73,6 +129,22 @@ export default function AdminProductsPage() {
       <div className="flex flex-wrap justify-between items-center gap-2">
         <h1 className="text-2xl font-bold">Produk</h1>
         <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setShowImportModal(true)}
+            className="btn-outline"
+            title="Import produk dari file Excel/CSV"
+          >
+            Import Excel
+          </button>
+          <button
+            type="button"
+            onClick={exportXlsx}
+            className="btn-outline"
+            title="Export semua produk yang sesuai filter ke Excel"
+          >
+            Export Excel
+          </button>
           <button
             type="button"
             onClick={() => setShowOpsCostModal(true)}
@@ -112,10 +184,20 @@ export default function AdminProductsPage() {
             </option>
           ))}
         </select>
-        {(search || categoryFilter !== '') && (
+        <select
+          className="input max-w-xs"
+          value={stockFilter}
+          onChange={(e) => setStockFilter(e.target.value as '' | 'low' | 'out')}
+          title="Filter berdasarkan stok"
+        >
+          <option value="">Semua stok</option>
+          <option value="low">Stok hampir habis</option>
+          <option value="out">Stok habis (0)</option>
+        </select>
+        {(search || categoryFilter !== '' || stockFilter !== '') && (
           <button
             type="button"
-            onClick={() => { setSearch(''); setCategoryFilter(''); }}
+            onClick={() => { setSearch(''); setCategoryFilter(''); setStockFilter(''); }}
             className="btn-ghost text-sm"
           >
             Reset filter
@@ -143,18 +225,19 @@ export default function AdminProductsPage() {
             {loading && (
               <tr><td colSpan={8} className="px-3 py-10 text-center text-gray-500">Memuat...</td></tr>
             )}
-            {!loading && products.length === 0 && (
+            {!loading && filteredProducts.length === 0 && (
               <tr><td colSpan={8} className="px-3 py-10 text-center text-gray-500">
-                {search || categoryFilter ? 'Tidak ada produk yang cocok dengan filter.' : 'Belum ada produk.'}
+                {search || categoryFilter || stockFilter ? 'Tidak ada produk yang cocok dengan filter.' : 'Belum ada produk.'}
               </td></tr>
             )}
-            {products.map((p) => {
+            {filteredProducts.map((p) => {
               const opsPct = p.price > 0
                 ? ((p.operational_cost / p.price) * 100).toFixed(1)
                 : null;
-              // Prefer the server-computed selling_price when available, fall
-              // back to local sum so older API responses still render.
               const sellingPrice = p.selling_price ?? (p.price + p.operational_cost);
+              const t = effectiveThreshold(p);
+              const isOut = p.stock <= 0;
+              const isLow = !isOut && p.stock <= t;
               return (
                 <tr key={p.id} className="border-t border-gray-100">
                   <td className="px-3 py-2 font-medium">{p.name}</td>
@@ -164,7 +247,23 @@ export default function AdminProductsPage() {
                     <div>{formatRupiah(p.operational_cost)}</div>
                     {opsPct && <div className="text-[10px] text-gray-500">{opsPct}%</div>}
                   </td>
-                  <td className="px-3 py-2 text-right">{p.stock}</td>
+                  <td className="px-3 py-2 text-right">
+                    <div className="flex items-center justify-end gap-1.5">
+                      {isOut && (
+                        <span className="text-[9px] font-semibold uppercase bg-red-100 text-red-700 px-1.5 py-0.5 rounded">
+                          Habis
+                        </span>
+                      )}
+                      {isLow && (
+                        <span className="text-[9px] font-semibold uppercase bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded" title={`≤ ${t}`}>
+                          Low
+                        </span>
+                      )}
+                      <span className={isOut ? 'text-red-600 font-semibold' : isLow ? 'text-amber-600 font-semibold' : ''}>
+                        {p.stock}
+                      </span>
+                    </div>
+                  </td>
                   <td className="px-3 py-2">
                     <span className={`chip ${p.is_active ? 'bg-green-100 text-green-800' : 'bg-gray-100'}`}>
                       {p.is_active ? 'Aktif' : 'Nonaktif'}
@@ -199,6 +298,13 @@ export default function AdminProductsPage() {
           activeCategoryId={categoryFilter || null}
           onClose={() => setShowOpsCostModal(false)}
           onApplied={() => { loadProducts(); loadCategories(); }}
+        />
+      )}
+
+      {showImportModal && (
+        <ImportProductsModal
+          onClose={() => setShowImportModal(false)}
+          onImported={() => { loadProducts(); loadCategories(); }}
         />
       )}
     </div>
@@ -650,5 +756,267 @@ function ModalShell({
         {children}
       </div>
     </div>
+  );
+}
+
+
+
+/* --------------------- Modal: Import Excel/CSV --------------------- */
+
+/**
+ * Workflow:
+ *  1. Admin pilih file (xlsx/xls/csv) — di-parse di browser via SheetJS.
+ *  2. Tampilkan preview baris pertama (max 50) supaya admin bisa cek
+ *     pemetaan kolom sebelum commit.
+ *  3. Klik "Import" → POST seluruh array ke /admin/products/bulk-import.
+ *  4. Tampilkan summary: created, updated, errors[] supaya admin tahu
+ *     baris mana yang gagal kalau ada.
+ *
+ * Format kolom yang dikenali (case-insensitive header):
+ *   name (req), slug, category, price (req), operational_cost,
+ *   stock, weight, description, is_active, low_stock_threshold
+ *
+ * Variant TIDAK diimport via Excel — tujuannya menjaga kontrak file sederhana.
+ * Admin tetap bisa edit varian per produk lewat UI.
+ */
+function ImportProductsModal({
+  onClose, onImported,
+}: { onClose: () => void; onImported: () => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [matchBy, setMatchBy] = useState<'slug' | 'name'>('slug');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{
+    created: number; updated: number; errors: { row: number; error: string }[];
+  } | null>(null);
+
+  function downloadTemplate() {
+    const sample = [
+      {
+        name: 'Stir Skeleton Racing 14 inch',
+        slug: 'stir-skeleton-racing-14-inch',
+        category: 'Aksesoris Kemudi',
+        price: 450000,
+        operational_cost: 50000,
+        stock: 10,
+        weight: 1500,
+        description: 'Stir aftermarket racing 14 inch',
+        is_active: 1,
+        low_stock_threshold: 3,
+      },
+    ];
+    const ws = XLSX.utils.json_to_sheet(sample);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Produk');
+    XLSX.writeFile(wb, 'template_import_produk.xlsx');
+  }
+
+  async function onPickFile(f: File) {
+    setFile(f);
+    setRows([]);
+    setParseError(null);
+    setResult(null);
+    try {
+      const buf = await f.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const sheetName = wb.SheetNames[0];
+      if (!sheetName) {
+        setParseError('File tidak punya sheet.');
+        return;
+      }
+      const sheet = wb.Sheets[sheetName];
+      // raw: false — agar angka tetap angka, tapi tanggal/string tetap string.
+      const parsed = XLSX.utils.sheet_to_json(sheet, { defval: null }) as Record<string, unknown>[];
+      if (parsed.length === 0) {
+        setParseError('Sheet kosong / tidak ada data row.');
+        return;
+      }
+      // Normalisasi key (lowercase, hilangkan spasi → underscore) supaya
+      // header tidak case-sensitive. Backend menerima nama key snake_case.
+      const normalized = parsed.map((row) => {
+        const out: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(row)) {
+          const nk = k.toString().trim().toLowerCase().replace(/\s+/g, '_');
+          out[nk] = v;
+        }
+        return out;
+      });
+      setRows(normalized);
+    } catch (e) {
+      setParseError((e as Error).message ?? 'Gagal parse file.');
+    }
+  }
+
+  async function onSubmit() {
+    if (rows.length === 0) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      const r = await api.post('/admin/products/bulk-import', {
+        rows,
+        match_by: matchBy,
+      });
+      setResult({
+        created: r.data.created ?? 0,
+        updated: r.data.updated ?? 0,
+        errors:  r.data.errors ?? [],
+      });
+      if ((r.data.created ?? 0) + (r.data.updated ?? 0) > 0) {
+        onImported();
+      }
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const previewRows = rows.slice(0, 50);
+  const previewKeys = previewRows[0] ? Object.keys(previewRows[0]) : [];
+
+  return (
+    <ModalShell title="Import Produk dari Excel/CSV" onClose={onClose} size="lg">
+      {!result ? (
+        <div className="space-y-3">
+          <p className="text-sm text-gray-600">
+            Upload file Excel (.xlsx) atau CSV. File akan di-parse di browser
+            untuk pratinjau, baru dikirim ke server. Maks 1.000 baris per import.
+          </p>
+
+          <div className="flex flex-wrap gap-2 items-center">
+            <input
+              type="file"
+              accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) onPickFile(f);
+                e.target.value = '';
+              }}
+              className="text-sm"
+            />
+            <button type="button" onClick={downloadTemplate} className="btn-outline text-xs">
+              Download Template
+            </button>
+          </div>
+
+          {parseError && (
+            <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-2">
+              {parseError}
+            </div>
+          )}
+
+          {file && rows.length > 0 && (
+            <>
+              <div className="text-sm text-gray-700">
+                File: <b>{file.name}</b> · {rows.length} baris terdeteksi.
+              </div>
+
+              <div>
+                <label className="label">Identifier untuk update</label>
+                <select
+                  className="input max-w-xs"
+                  value={matchBy}
+                  onChange={(e) => setMatchBy(e.target.value as 'slug' | 'name')}
+                >
+                  <option value="slug">Slug (paling akurat)</option>
+                  <option value="name">Nama produk</option>
+                </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  Kalau slug/nama yang sama sudah ada, baris akan <b>update</b> produk existing.
+                  Kalau belum ada, baris akan dibuat sebagai produk baru.
+                </p>
+              </div>
+
+              <div className="card overflow-hidden">
+                <div className="overflow-x-auto max-h-[40vh]">
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-50 text-left sticky top-0">
+                      <tr>
+                        <th className="px-2 py-1">#</th>
+                        {previewKeys.map((k) => (
+                          <th key={k} className="px-2 py-1 whitespace-nowrap">{k}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {previewRows.map((row, i) => (
+                        <tr key={i} className="border-t border-gray-100">
+                          <td className="px-2 py-1 text-gray-400">{i + 1}</td>
+                          {previewKeys.map((k) => (
+                            <td key={k} className="px-2 py-1 whitespace-nowrap text-gray-700">
+                              {String(row[k] ?? '')}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {rows.length > 50 && (
+                  <div className="px-2 py-1 text-xs text-gray-500 border-t border-gray-100">
+                    ...dan {rows.length - 50} baris lainnya tidak ditampilkan di pratinjau.
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" onClick={onClose} className="btn-outline" disabled={busy}>
+              Batal
+            </button>
+            <button
+              type="button"
+              onClick={onSubmit}
+              disabled={busy || rows.length === 0}
+              className="btn-primary disabled:opacity-50"
+            >
+              {busy ? 'Mengimport...' : `Import ${rows.length} Produk`}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="card p-3 bg-green-50 border-green-200">
+            <div className="text-green-900 font-semibold">Import selesai</div>
+            <div className="text-sm">
+              Produk dibuat: <b>{result.created}</b> · Diupdate: <b>{result.updated}</b>
+              {result.errors.length > 0 && <> · Gagal: <b>{result.errors.length}</b></>}
+            </div>
+          </div>
+          {result.errors.length > 0 && (
+            <div className="card overflow-hidden">
+              <div className="px-3 py-2 bg-red-50 border-b border-red-100 text-sm font-semibold text-red-800">
+                {result.errors.length} baris gagal:
+              </div>
+              <div className="max-h-[40vh] overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-1 text-left">Row</th>
+                      <th className="px-3 py-1 text-left">Pesan</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.errors.map((e, i) => (
+                      <tr key={i} className="border-t border-gray-100">
+                        <td className="px-3 py-1 font-mono">{e.row}</td>
+                        <td className="px-3 py-1 text-red-700">{e.error}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          <div className="flex justify-end">
+            <button type="button" onClick={onClose} className="btn-primary">
+              Selesai
+            </button>
+          </div>
+        </div>
+      )}
+    </ModalShell>
   );
 }

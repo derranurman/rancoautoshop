@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Models\Product;
+use App\Models\SiteSetting;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -16,6 +17,24 @@ class DashboardController extends Controller
     {
         $today = now()->startOfDay();
         $startMonth = now()->startOfMonth();
+        $globalThreshold = (int) (SiteSetting::current()->low_stock_threshold ?? 5);
+
+        // Stok rendah: per produk, pakai threshold lokal kalau ada, kalau tidak
+        // pakai global. Stok 0 ikut dihitung sebagai low-stock supaya admin
+        // langsung lihat dari dashboard berapa SKU yang perlu re-stock.
+        $lowStockCount = (int) Product::query()
+            ->where('is_active', true)
+            ->where(function ($outer) use ($globalThreshold) {
+                $outer->where(function ($q) {
+                    $q->whereNotNull('low_stock_threshold')
+                      ->whereColumn('stock', '<=', 'low_stock_threshold');
+                })->orWhere(function ($q) use ($globalThreshold) {
+                    $q->whereNull('low_stock_threshold')
+                      ->where('stock', '<=', $globalThreshold);
+                });
+            })
+            ->count();
+        $outOfStockCount = (int) Product::where('is_active', true)->where('stock', '<=', 0)->count();
 
         return response()->json([
             'totals' => [
@@ -36,6 +55,11 @@ class DashboardController extends Controller
             ],
             'orders_by_status' => Order::select('status', DB::raw('count(*) as count'))
                 ->groupBy('status')->pluck('count', 'status'),
+            'inventory' => [
+                'low_stock_count'    => $lowStockCount,
+                'out_of_stock_count' => $outOfStockCount,
+                'global_threshold'   => $globalThreshold,
+            ],
         ]);
     }
 

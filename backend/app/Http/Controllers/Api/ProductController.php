@@ -17,7 +17,7 @@ class ProductController extends Controller
             ->with('category:id,name,slug', 'variants');
 
         if ($search = $request->string('search')->trim()->value()) {
-            $q->where('name', 'like', "%{$search}%");
+            $this->applySearch($q, $search);
         }
         if ($categorySlug = $request->string('category')->trim()->value()) {
             $q->whereHas('category', fn ($c) => $c->where('slug', $categorySlug));
@@ -37,6 +37,60 @@ class ProductController extends Controller
             $q->paginate($request->integer('per_page', 12))
                 ->through(fn (Product $p) => $this->transform($p))
         );
+    }
+
+    /**
+     * Endpoint ringan untuk autocomplete pencarian di Navbar.
+     * Kembalikan max 8 hasil dengan field minimal supaya respons cepat.
+     */
+    public function suggest(Request $request): JsonResponse
+    {
+        $term = $request->string('q')->trim()->value();
+        if (strlen($term) < 2) {
+            return response()->json(['data' => []]);
+        }
+
+        $q = Product::query()
+            ->where('is_active', true)
+            ->with('category:id,name,slug');
+        $this->applySearch($q, $term);
+
+        $results = $q->limit(8)->get()->map(fn (Product $p) => [
+            'id'            => $p->id,
+            'slug'          => $p->slug,
+            'name'          => $p->name,
+            'selling_price' => $p->selling_price,
+            'image'         => $p->images[0] ?? null,
+            'category'      => $p->category?->name,
+            'in_stock'      => (int) $p->stock > 0,
+        ]);
+
+        return response()->json(['data' => $results]);
+    }
+
+    /**
+     * Apply pencarian multi-kolom: nama, deskripsi, slug, kategori, dan SKU varian.
+     * Tiap kata di query dipotong & masing-masing harus muncul di salah satu kolom
+     * (AND across words, OR across columns) — meniru perilaku search engine ringan
+     * supaya pencarian "stir merah 14" yang nyebar di name + variant + description
+     * tetap ke-match.
+     */
+    protected function applySearch($q, string $term): void
+    {
+        $words = preg_split('/\s+/', trim($term)) ?: [];
+        $words = array_values(array_filter(array_unique($words), fn ($w) => $w !== ''));
+        if (empty($words)) return;
+
+        foreach ($words as $w) {
+            $like = '%'.$w.'%';
+            $q->where(function ($qq) use ($like) {
+                $qq->where('name', 'like', $like)
+                   ->orWhere('description', 'like', $like)
+                   ->orWhere('slug', 'like', $like)
+                   ->orWhereHas('category', fn ($c) => $c->where('name', 'like', $like))
+                   ->orWhereHas('variants', fn ($v) => $v->where('name', 'like', $like)->orWhere('sku', 'like', $like));
+            });
+        }
     }
 
     /** Public product detail by slug. */
@@ -65,8 +119,9 @@ class ProductController extends Controller
             'name'             => $p->name,
             'price'            => $p->price,
             'operational_cost' => $p->operational_cost,
-            'selling_price'    => $p->selling_price, // harga awal (price + operational); per varian dihitung di FE
+            'selling_price'    => $p->selling_price,
             'stock'            => $effectiveStock,
+            'low_stock_threshold' => $p->low_stock_threshold,
             'weight'           => $p->weight,
             'images'           => $p->images ?: [],
             'category'         => $p->category ? ['id' => $p->category->id, 'name' => $p->category->name, 'slug' => $p->category->slug] : null,

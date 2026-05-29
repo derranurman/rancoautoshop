@@ -82,6 +82,14 @@ class OrderAdminController extends Controller
             if ($data['status'] === Order::STATUS_PAID && ! $order->paid_at) {
                 $patch['paid_at'] = now();
             }
+            // COD: pembayaran terjadi saat barang diterima customer. Begitu admin
+            // menandai DELIVERED dan order ini COD belum punya paid_at, set
+            // paid_at otomatis supaya laporan omset dihitung benar.
+            if ($data['status'] === Order::STATUS_DELIVERED
+                && $order->payment_method === Order::PAYMENT_METHOD_COD
+                && ! $order->paid_at) {
+                $patch['paid_at'] = now();
+            }
             // Kalau admin meng-cancel order, kembalikan stok produk/varian
             // (cermin perilaku OrderController::cancel di sisi customer).
             if ($data['status'] === Order::STATUS_CANCELLED && $order->status !== Order::STATUS_CANCELLED) {
@@ -105,11 +113,15 @@ class OrderAdminController extends Controller
             if (! $note) {
                 $note = match ($data['status']) {
                     Order::STATUS_PAID      => 'Pembayaran dikonfirmasi oleh admin.',
-                    Order::STATUS_PACKED    => 'Pesanan sedang dikemas di gudang.',
+                    Order::STATUS_PACKED    => $order->payment_method === Order::PAYMENT_METHOD_COD
+                        ? 'Pesanan COD sedang dikemas di gudang.'
+                        : 'Pesanan sedang dikemas di gudang.',
                     Order::STATUS_SHIPPED   => $order->tracking_number
                         ? "Pesanan diserahkan ke kurir ".strtoupper((string) $order->courier).". Resi: {$order->tracking_number}"
                         : 'Pesanan diserahkan ke kurir.',
-                    Order::STATUS_DELIVERED => 'Pesanan telah diterima oleh pelanggan.',
+                    Order::STATUS_DELIVERED => $order->payment_method === Order::PAYMENT_METHOD_COD
+                        ? 'Paket COD diterima pelanggan & pembayaran tunai diterima kurir.'
+                        : 'Pesanan telah diterima oleh pelanggan.',
                     Order::STATUS_CANCELLED => 'Pesanan dibatalkan oleh admin.',
                     default                 => null,
                 };

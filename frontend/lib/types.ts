@@ -61,6 +61,8 @@ export interface Product {
   operational_cost: number;
   selling_price: number;
   stock: number;
+  /** Threshold "stok hampir habis" (per produk). null = pakai default global. */
+  low_stock_threshold?: number | null;
   weight: number;
   images: string[];
   description?: string;
@@ -68,6 +70,17 @@ export interface Product {
   /** True kalau produk punya minimal satu varian aktif. */
   has_variants?: boolean;
   variants?: ProductVariant[];
+}
+
+/** Hasil ringkas dari /products/suggest untuk autocomplete Navbar. */
+export interface ProductSuggestion {
+  id: number;
+  slug: string;
+  name: string;
+  selling_price: number;
+  image: string | null;
+  category: string | null;
+  in_stock: boolean;
 }
 
 export interface CartItem {
@@ -101,7 +114,7 @@ export type OrderStatus =
   | 'awaiting_verification'
   | 'paid' | 'packed' | 'shipped' | 'delivered' | 'cancelled';
 
-export type PaymentMethod = 'midtrans' | 'manual_transfer';
+export type PaymentMethod = 'midtrans' | 'manual_transfer' | 'cod';
 
 export interface OrderItem {
   id: number;
@@ -187,6 +200,16 @@ export interface SiteSettings {
   bank_account_holder: string | null;
   bank_branch: string | null;
   bank_extra_note: string | null;
+
+  /** COD (Cash on Delivery) — toggle + parameter nominal. */
+  cod_enabled: boolean;
+  cod_min_total: number;
+  cod_max_total: number | null;
+  cod_extra_fee: number;
+  cod_extra_note: string | null;
+
+  /** Threshold global "stok hampir habis" untuk indikator di storefront. */
+  low_stock_threshold: number;
 }
 
 /**
@@ -207,4 +230,11 @@ export interface SiteSettingsAdmin extends Omit<SiteSettings, 'whatsapp_number' 
   whatsapp_number: string | null;            // input mentah admin
   whatsapp_number_normalized: string | null; // hasil normalisasi (read-only preview)
   whatsapp_link: string | null;
+
+  /** Sender info — admin only, untuk label pengiriman PDF. */
+  sender_name: string | null;
+  sender_phone: string | null;
+  sender_address: string | null;
+  sender_city: string | null;
+  sender_postal_code: string | null;
 }
