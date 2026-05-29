@@ -6,6 +6,22 @@ import toast from 'react-hot-toast';
 import { api, apiError, formatRupiah } from '@/lib/api';
 import type { Category } from '@/lib/types';
 
+/**
+ * Draft varian saat editing di form admin. Kalau punya `id`, varian ini sudah
+ * ada di DB dan akan di-update; kalau tidak, baris ini akan di-create saat submit.
+ */
+interface VariantDraft {
+  id?: number;
+  name: string;
+  sku: string;
+  stock: number;
+  /** Harga override; string supaya input bisa kosong = "ikut harga produk". */
+  price_override: string;
+  weight_override: string;
+  image: string | null;
+  is_active: boolean;
+}
+
 interface FormState {
   category_id: number | '';
   name: string;
@@ -16,11 +32,13 @@ interface FormState {
   weight: number;
   images: string[];
   is_active: boolean;
+  variants: VariantDraft[];
 }
 
 const DEFAULT: FormState = {
   category_id: '', name: '', description: '',
   price: 0, operational_cost: 0, stock: 0, weight: 1000, images: [], is_active: true,
+  variants: [],
 };
 
 const ACCEPTED = 'image/jpeg,image/png,image/webp,image/gif';
@@ -60,6 +78,22 @@ export default function ProductForm({ productId }: { productId?: number }) {
           price: p.price, operational_cost: p.operational_cost,
           stock: p.stock, weight: p.weight,
           images: p.images ?? [], is_active: !!p.is_active,
+          variants: Array.isArray(p.variants)
+            ? p.variants.map((v: {
+                id: number; name: string; sku: string | null; stock: number;
+                price_override: number | null; weight_override?: number | null;
+                image: string | null; is_active: boolean;
+              }) => ({
+                id: v.id,
+                name: v.name ?? '',
+                sku: v.sku ?? '',
+                stock: v.stock ?? 0,
+                price_override: v.price_override == null ? '' : String(v.price_override),
+                weight_override: v.weight_override == null ? '' : String(v.weight_override),
+                image: v.image ?? null,
+                is_active: v.is_active !== false,
+              }))
+            : [],
         });
       });
     }
@@ -195,19 +229,125 @@ export default function ProductForm({ productId }: { productId?: number }) {
     if (e.dataTransfer.files?.length) void uploadFiles(e.dataTransfer.files);
   }
 
+  /* --------------------- Variants helpers --------------------- */
+
+  function addVariant() {
+    setForm((f) => ({
+      ...f,
+      variants: [
+        ...f.variants,
+        {
+          name: '',
+          sku: '',
+          stock: 0,
+          price_override: '',
+          weight_override: '',
+          image: null,
+          is_active: true,
+        },
+      ],
+    }));
+  }
+
+  function updateVariant(idx: number, patch: Partial<VariantDraft>) {
+    setForm((f) => ({
+      ...f,
+      variants: f.variants.map((v, i) => (i === idx ? { ...v, ...patch } : v)),
+    }));
+  }
+
+  function removeVariant(idx: number) {
+    setForm((f) => ({ ...f, variants: f.variants.filter((_, i) => i !== idx) }));
+  }
+
+  async function uploadVariantImage(idx: number, file: File) {
+    if (!ACCEPTED.split(',').includes(file.type)) {
+      toast.error('Format foto tidak didukung'); return;
+    }
+    if (file.size > MAX_BYTES) {
+      toast.error('Foto maks. 5 MB'); return;
+    }
+    setUploading((n) => n + 1);
+    try {
+      const fd = new FormData();
+      fd.append('image', file);
+      const r = await api.post('/admin/products/upload-image', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      updateVariant(idx, { image: r.data.url as string });
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setUploading((n) => n - 1);
+    }
+  }
+
+  /** Total stok semua varian (preview untuk admin). */
+  const variantsTotalStock = useMemo(
+    () => form.variants.reduce((s, v) => s + (Number.isFinite(v.stock) ? Number(v.stock) : 0), 0),
+    [form.variants],
+  );
+  const hasVariants = form.variants.length > 0;
+
   async function submit() {
+    // Validasi varian sebelum kirim — backend juga validate, tapi UX lebih bagus.
+    if (hasVariants) {
+      for (const [i, v] of form.variants.entries()) {
+        if (!v.name.trim()) {
+          toast.error(`Varian ke-${i + 1} belum ada nama.`);
+          return;
+        }
+        if (Number(v.stock) < 0 || !Number.isFinite(Number(v.stock))) {
+          toast.error(`Stok varian "${v.name || i + 1}" tidak valid.`);
+          return;
+        }
+      }
+      // Cek nama duplikat (case-insensitive).
+      const seen = new Set<string>();
+      for (const v of form.variants) {
+        const k = v.name.trim().toLowerCase();
+        if (seen.has(k)) {
+          toast.error(`Nama varian "${v.name}" duplikat.`);
+          return;
+        }
+        seen.add(k);
+      }
+    }
+
     setLoading(true);
     try {
       const payload: Record<string, unknown> = {
-        ...form,
         category_id: form.category_id === '' ? null : form.category_id,
+        name: form.name,
+        description: form.description,
+        price: form.price,
+        // stock akan ditimpa oleh server kalau ada varian (jadi total agregat),
+        // tetap dikirim sebagai fallback untuk produk tanpa varian.
+        stock: hasVariants ? variantsTotalStock : form.stock,
+        weight: form.weight,
+        images: form.images,
+        is_active: form.is_active,
       };
       // In auto mode we omit operational_cost so the backend recomputes
-      // from category percent. This keeps both client and server logic
-      // in sync if the percent changes later.
-      if (!opsManual) {
-        delete payload.operational_cost;
+      // from category percent.
+      if (opsManual) {
+        payload.operational_cost = form.operational_cost;
       }
+      // Hanya kirim variants kalau admin secara eksplisit ingin mengubah
+      // (form selalu bawa array; kalau kosong di product yang sebelumnya
+      // punya varian, ini akan menghapus semua → memang itu intent admin).
+      payload.variants = form.variants.map((v, i) => ({
+        id: v.id,
+        name: v.name.trim(),
+        sku: v.sku.trim() || null,
+        stock: Number(v.stock) || 0,
+        price_override: v.price_override === '' ? null : Number(v.price_override),
+        weight_override: v.weight_override === '' ? null : Number(v.weight_override),
+        image: v.image,
+        is_active: v.is_active,
+        sort_order: i,
+      }));
+
       if (productId) await api.put(`/admin/products/${productId}`, payload);
       else await api.post('/admin/products', payload);
       toast.success('Produk disimpan');
@@ -303,9 +443,20 @@ export default function ProductForm({ productId }: { productId?: number }) {
                 )}
               </div>
             </div>
-            <div><label className="label">Stok</label>
-              <input type="number" className="input" value={form.stock}
-                     onChange={(e) => setForm({ ...form, stock: +e.target.value })} />
+            <div>
+              <label className="label">Stok {hasVariants && <span className="text-xs text-gray-400">(total varian)</span>}</label>
+              <input
+                type="number"
+                className={`input ${hasVariants ? 'bg-gray-50 cursor-not-allowed' : ''}`}
+                value={hasVariants ? variantsTotalStock : form.stock}
+                onChange={(e) => setForm({ ...form, stock: +e.target.value })}
+                readOnly={hasVariants}
+              />
+              {hasVariants && (
+                <div className="text-xs text-gray-500 mt-1">
+                  Stok dihitung otomatis dari total semua varian aktif.
+                </div>
+              )}
             </div>
             <div><label className="label">Berat (gram)</label>
               <input type="number" className="input" value={form.weight}
@@ -393,12 +544,188 @@ export default function ProductForm({ productId }: { productId?: number }) {
         </div>
       </div>
 
+      {/* ---------------- Variants editor ---------------- */}
+      <div className="card p-4 space-y-3">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="font-semibold">Varian Produk (opsional)</h2>
+            <p className="text-xs text-gray-500">
+              Misal: warna (Merah, Biru, Hitam), ukuran, atau ukuran roda. Setiap varian
+              boleh punya stok &amp; harga sendiri. Kalau dikosongkan, produk dianggap tunggal —
+              stok &amp; harga di atas yang dipakai.
+            </p>
+          </div>
+          <button type="button" className="btn-outline" onClick={addVariant}>
+            + Tambah Varian
+          </button>
+        </div>
+
+        {form.variants.length === 0 && (
+          <div className="text-sm text-gray-400 italic">
+            Belum ada varian. Klik &ldquo;+ Tambah Varian&rdquo; untuk membuat warna/ukuran.
+          </div>
+        )}
+
+        <div className="space-y-2">
+          {form.variants.map((v, i) => (
+            <VariantRow
+              key={v.id ?? `new-${i}`}
+              draft={v}
+              onChange={(patch) => updateVariant(i, patch)}
+              onRemove={() => removeVariant(i)}
+              onPickImage={(file) => uploadVariantImage(i, file)}
+              productPrice={form.price}
+              productOpsCost={form.operational_cost}
+              productWeight={form.weight}
+            />
+          ))}
+        </div>
+
+        {hasVariants && (
+          <div className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded p-2">
+            Total stok semua varian aktif: <b>{variantsTotalStock}</b> unit.
+            Pelanggan wajib memilih varian sebelum bisa menambahkan ke keranjang / Beli Sekarang.
+          </div>
+        )}
+      </div>
+
       <div className="flex gap-2">
         <button onClick={submit} disabled={loading || uploading > 0}
                 className="btn-primary disabled:opacity-50">
           {loading ? 'Menyimpan...' : uploading > 0 ? 'Menunggu unggah...' : 'Simpan'}
         </button>
         <button onClick={() => router.back()} className="btn-outline">Batal</button>
+      </div>
+    </div>
+  );
+}
+
+/* --------------------- Sub: VariantRow --------------------- */
+
+function VariantRow({
+  draft, onChange, onRemove, onPickImage,
+  productPrice, productOpsCost, productWeight,
+}: {
+  draft: VariantDraft;
+  onChange: (patch: Partial<VariantDraft>) => void;
+  onRemove: () => void;
+  onPickImage: (file: File) => void;
+  productPrice: number;
+  productOpsCost: number;
+  productWeight: number;
+}) {
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const effectivePrice =
+    draft.price_override === '' ? productPrice : Number(draft.price_override) || 0;
+  const sellingPrice = effectivePrice + productOpsCost;
+  const effectiveWeight =
+    draft.weight_override === '' ? productWeight : Number(draft.weight_override) || 0;
+
+  return (
+    <div className="border rounded-lg p-3 space-y-2 bg-white">
+      <div className="flex items-start gap-3 flex-wrap">
+        <div
+          onClick={() => fileRef.current?.click()}
+          className="w-16 h-16 rounded-md bg-gray-50 border border-dashed border-gray-300 grid place-items-center text-xs text-gray-500 cursor-pointer overflow-hidden shrink-0 hover:border-brand"
+          title="Klik untuk unggah foto varian"
+        >
+          {draft.image ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={draft.image} alt="" className="w-full h-full object-cover" />
+          ) : (
+            <span className="px-1 text-center leading-tight">Foto<br />varian</span>
+          )}
+          <input
+            ref={fileRef}
+            type="file"
+            accept={ACCEPTED}
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) onPickImage(f);
+              e.target.value = '';
+            }}
+          />
+        </div>
+
+        <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-2 min-w-0">
+          <div className="col-span-2">
+            <label className="label text-xs">Nama varian</label>
+            <input
+              className="input"
+              placeholder="cth: Merah / 14 inch / L"
+              value={draft.name}
+              onChange={(e) => onChange({ name: e.target.value })}
+              maxLength={120}
+            />
+          </div>
+          <div>
+            <label className="label text-xs">SKU (opsional)</label>
+            <input
+              className="input"
+              placeholder="STR-MRH-14"
+              value={draft.sku}
+              onChange={(e) => onChange({ sku: e.target.value })}
+              maxLength={80}
+            />
+          </div>
+          <div>
+            <label className="label text-xs">Stok</label>
+            <input
+              type="number"
+              min={0}
+              className="input"
+              value={draft.stock}
+              onChange={(e) => onChange({ stock: Number(e.target.value) })}
+            />
+          </div>
+          <div>
+            <label className="label text-xs">Harga override (Rp)</label>
+            <input
+              type="number"
+              min={0}
+              className="input"
+              placeholder={`ikut ${productPrice.toLocaleString('id-ID')}`}
+              value={draft.price_override}
+              onChange={(e) => onChange({ price_override: e.target.value })}
+            />
+            <div className="text-[10px] text-gray-500 mt-0.5">
+              Kosongkan → ikut harga produk. Harga jual ke pelanggan saat varian ini dipilih:{' '}
+              <b>{formatRupiah(sellingPrice)}</b>
+            </div>
+          </div>
+          <div>
+            <label className="label text-xs">Berat override (g)</label>
+            <input
+              type="number"
+              min={1}
+              className="input"
+              placeholder={`ikut ${productWeight}`}
+              value={draft.weight_override}
+              onChange={(e) => onChange({ weight_override: e.target.value })}
+            />
+            <div className="text-[10px] text-gray-500 mt-0.5">
+              Berat efektif: <b>{effectiveWeight} g</b>
+            </div>
+          </div>
+          <div className="col-span-2 flex items-center gap-3">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={draft.is_active}
+                onChange={(e) => onChange({ is_active: e.target.checked })}
+              />
+              Aktif
+            </label>
+            <button
+              type="button"
+              onClick={onRemove}
+              className="ml-auto text-xs text-red-600 hover:underline"
+            >
+              Hapus varian
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

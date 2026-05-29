@@ -42,6 +42,12 @@ export default function CartPage() {
                 <img src={it.image ?? 'https://placehold.co/200x200'} className="w-20 h-20 rounded object-cover" alt="" />
                 <div className="flex-1">
                   <Link href={`/product/${it.slug}`} className="font-medium hover:text-brand">{it.name}</Link>
+                  {it.variant_name && (
+                    <div className="text-xs text-gray-500">
+                      Varian: <span className="font-medium text-gray-700">{it.variant_name}</span>
+                      {it.variant_sku && <span className="text-gray-400"> · {it.variant_sku}</span>}
+                    </div>
+                  )}
                   <div className="text-brand font-bold">{formatRupiah(it.selling_price)}</div>
                   <div className="text-xs text-gray-500">Stok: {it.stock}</div>
                   <div className="mt-2 flex items-center gap-2">

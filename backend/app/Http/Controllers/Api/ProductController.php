@@ -14,7 +14,7 @@ class ProductController extends Controller
     {
         $q = Product::query()
             ->where('is_active', true)
-            ->with('category:id,name,slug');
+            ->with('category:id,name,slug', 'variants');
 
         if ($search = $request->string('search')->trim()->value()) {
             $q->where('name', 'like', "%{$search}%");
@@ -43,23 +43,45 @@ class ProductController extends Controller
     public function show(string $slug): JsonResponse
     {
         $product = Product::where('slug', $slug)->where('is_active', true)
-            ->with('category:id,name,slug')->firstOrFail();
+            ->with('category:id,name,slug', 'variants')
+            ->firstOrFail();
         return response()->json(['data' => $this->transform($product, withDescription: true)]);
     }
 
     protected function transform(Product $p, bool $withDescription = false): array
     {
+        // Hanya tampilkan varian aktif ke publik. Total stok efektif:
+        // - kalau punya varian aktif → sum stok semua varian
+        // - kalau tidak               → kolom stock di produk
+        $activeVariants = $p->relationLoaded('variants')
+            ? $p->variants->where('is_active', true)->values()
+            : collect();
+        $hasVariants = $activeVariants->isNotEmpty();
+        $effectiveStock = $hasVariants ? (int) $activeVariants->sum('stock') : (int) $p->stock;
+
         $out = [
             'id'               => $p->id,
             'slug'             => $p->slug,
             'name'             => $p->name,
             'price'            => $p->price,
             'operational_cost' => $p->operational_cost,
-            'selling_price'    => $p->selling_price, // harga yang ditampilkan (price + operational)
-            'stock'            => $p->stock,
+            'selling_price'    => $p->selling_price, // harga awal (price + operational); per varian dihitung di FE
+            'stock'            => $effectiveStock,
             'weight'           => $p->weight,
             'images'           => $p->images ?: [],
             'category'         => $p->category ? ['id' => $p->category->id, 'name' => $p->category->name, 'slug' => $p->category->slug] : null,
+            'has_variants'     => $hasVariants,
+            'variants'         => $activeVariants->map(fn ($v) => [
+                'id'             => $v->id,
+                'name'           => $v->name,
+                'sku'            => $v->sku,
+                'stock'          => (int) $v->stock,
+                'price_override' => $v->price_override,
+                'effective_price' => $v->effective_price,
+                'selling_price'  => $v->selling_price,
+                'weight'         => $v->effective_weight,
+                'image'          => $v->image,
+            ])->values(),
         ];
         if ($withDescription) {
             $out['description'] = $p->description;

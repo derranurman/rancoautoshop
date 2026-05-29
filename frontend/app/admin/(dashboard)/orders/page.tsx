@@ -7,7 +7,7 @@ import * as XLSX from 'xlsx';
 import { api, apiError, formatRupiah } from '@/lib/api';
 import type { Order } from '@/lib/types';
 
-const STATUSES = ['', 'pending', 'paid', 'packed', 'shipped', 'delivered', 'cancelled'];
+const STATUSES = ['', 'pending', 'awaiting_verification', 'paid', 'packed', 'shipped', 'delivered', 'cancelled'];
 
 /** Format ISO timestamp -> "dd/mm/yyyy hh:mm" lokal Indonesia. */
 function formatDateTime(iso: string | null | undefined) {

@@ -10,16 +10,19 @@ import { PackageTracker } from '@/components/PackageTracker';
 import { courierLabel } from '@/lib/couriers';
 
 const NEXT_STATUS: Record<string, string[]> = {
-  pending:   ['paid', 'cancelled'],
-  paid:      ['packed', 'cancelled'],
-  packed:    ['shipped'],
-  shipped:   ['delivered'],
-  delivered: [],
-  cancelled: [],
+  pending:               ['paid', 'cancelled'],
+  awaiting_verification: ['paid', 'pending', 'cancelled'],
+  paid:                  ['packed', 'cancelled'],
+  packed:                ['shipped'],
+  shipped:               ['delivered'],
+  delivered:             [],
+  cancelled:             [],
 };
 
 const STATUS_LABEL: Record<string, string> = {
-  pending: 'Menunggu Pembayaran', paid: 'Dibayar', packed: 'Dikemas',
+  pending: 'Menunggu Pembayaran',
+  awaiting_verification: 'Menunggu Verifikasi Admin',
+  paid: 'Dibayar', packed: 'Dikemas',
   shipped: 'Dikirim', delivered: 'Selesai', cancelled: 'Dibatalkan',
 };
 
@@ -32,6 +35,9 @@ export default function AdminOrderDetailPage() {
   const [eventNote, setEventNote] = useState('');
   const [eventLocation, setEventLocation] = useState('');
   const [busy, setBusy] = useState(false);
+  // Reject pembayaran manual: kotak alasan + busy state.
+  const [rejectReason, setRejectReason] = useState('');
+  const [showRejectForm, setShowRejectForm] = useState(false);
 
   async function load() {
     const r = await api.get(`/admin/orders/${id}`);
@@ -77,6 +83,35 @@ export default function AdminOrderDetailPage() {
     } finally { setBusy(false); }
   }
 
+  async function approvePayment() {
+    if (!confirm('Setujui pembayaran transfer manual ini? Pesanan akan langsung berstatus DIBAYAR.')) return;
+    setBusy(true);
+    try {
+      const r = await api.post(`/admin/orders/${id}/approve-payment`);
+      setOrder(r.data.data);
+      toast.success('Pembayaran disetujui.');
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally { setBusy(false); }
+  }
+
+  async function rejectPayment() {
+    if (!rejectReason.trim()) {
+      toast.error('Isi dulu alasan penolakan supaya pelanggan tahu apa yang harus diperbaiki.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await api.post(`/admin/orders/${id}/reject-payment`, { reason: rejectReason.trim() });
+      setOrder(r.data.data);
+      setRejectReason('');
+      setShowRejectForm(false);
+      toast.success('Bukti ditolak. Pelanggan diminta upload ulang.');
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally { setBusy(false); }
+  }
+
   if (!order) return <div className="text-gray-500">Memuat...</div>;
 
   const transitions = NEXT_STATUS[order.status] ?? [];
@@ -115,7 +150,16 @@ export default function AdminOrderDetailPage() {
         <div className="divide-y divide-gray-100">
           {order.items?.map((it) => (
             <div key={it.id} className="py-2 flex justify-between text-sm">
-              <span>{it.product_name} × {it.quantity}</span>
+              <span>
+                {it.product_name}
+                {it.variant_name && (
+                  <span className="text-gray-500"> — {it.variant_name}</span>
+                )}
+                {it.variant_sku && (
+                  <span className="text-xs text-gray-400 ml-1">({it.variant_sku})</span>
+                )}
+                {' '}× {it.quantity}
+              </span>
               <span>{formatRupiah(it.subtotal)}</span>
             </div>
           ))}
@@ -124,6 +168,97 @@ export default function AdminOrderDetailPage() {
           <span>Total</span><span>{formatRupiah(order.total)}</span>
         </div>
       </div>
+
+      {/* -------- Manual transfer: lihat & verifikasi bukti -------- */}
+      {order.payment_method === 'manual_transfer' && (
+        <div className="card p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <h2 className="font-semibold">Pembayaran Transfer Manual</h2>
+            <span className="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800">
+              {order.payment_verified_at
+                ? `Diverifikasi ${new Date(order.payment_verified_at).toLocaleString('id-ID')}`
+                : order.payment_proof_uploaded_at
+                  ? `Bukti masuk ${new Date(order.payment_proof_uploaded_at).toLocaleString('id-ID')}`
+                  : 'Menunggu bukti'}
+            </span>
+          </div>
+
+          {order.payment_rejection_reason && (
+            <div className="text-xs bg-red-50 border border-red-200 rounded p-2 text-red-800">
+              <b>Alasan penolakan terakhir:</b> {order.payment_rejection_reason}
+            </div>
+          )}
+
+          {order.payment_proof_url ? (
+            <a href={order.payment_proof_url} target="_blank" rel="noreferrer" className="block">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={order.payment_proof_url}
+                alt="Bukti transfer"
+                className="max-h-72 rounded-lg border border-gray-200 mx-auto bg-gray-50"
+              />
+              <div className="text-center text-xs text-gray-500 mt-1">
+                Klik untuk buka di tab baru
+              </div>
+            </a>
+          ) : (
+            <div className="text-sm text-gray-500 italic">
+              Pelanggan belum mengunggah bukti transfer.
+            </div>
+          )}
+
+          {order.status === 'awaiting_verification' && order.payment_proof_url && (
+            <div className="border-t border-gray-100 pt-3 space-y-2">
+              {!showRejectForm ? (
+                <div className="flex gap-2 flex-wrap">
+                  <button
+                    onClick={approvePayment}
+                    disabled={busy}
+                    className="btn-primary disabled:opacity-50"
+                  >
+                    Setujui &amp; Tandai Dibayar
+                  </button>
+                  <button
+                    onClick={() => setShowRejectForm(true)}
+                    disabled={busy}
+                    className="btn-outline text-red-600 border-red-300"
+                  >
+                    Tolak Bukti
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <label className="label">Alasan penolakan (akan dilihat pelanggan)</label>
+                  <textarea
+                    className="input"
+                    rows={3}
+                    placeholder="Cth: Nominal kurang Rp 5.000 / Bukti tidak terbaca / Atas nama tidak sesuai"
+                    value={rejectReason}
+                    onChange={(e) => setRejectReason(e.target.value)}
+                    maxLength={500}
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={rejectPayment}
+                      disabled={busy || !rejectReason.trim()}
+                      className="btn-primary bg-red-600 disabled:opacity-50"
+                    >
+                      {busy ? 'Memproses...' : 'Kirim Penolakan'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setShowRejectForm(false); setRejectReason(''); }}
+                      className="btn-outline"
+                    >
+                      Batal
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="card p-4 space-y-3">
         <h2 className="font-semibold">Update Status</h2>

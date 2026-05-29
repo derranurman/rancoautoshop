@@ -12,21 +12,26 @@ class Order extends Model
 {
     use HasFactory;
 
-    public const STATUS_PENDING   = 'pending';     // menunggu pembayaran
-    public const STATUS_PAID      = 'paid';        // sudah dibayar
-    public const STATUS_PACKED    = 'packed';      // sedang dikemas admin
-    public const STATUS_SHIPPED   = 'shipped';     // dikirim via kurir
-    public const STATUS_DELIVERED = 'delivered';   // diterima
-    public const STATUS_CANCELLED = 'cancelled';
+    public const STATUS_PENDING               = 'pending';                // menunggu pembayaran
+    public const STATUS_AWAITING_VERIFICATION = 'awaiting_verification';   // bukti transfer di-upload, menunggu admin verifikasi
+    public const STATUS_PAID                  = 'paid';        // sudah dibayar
+    public const STATUS_PACKED                = 'packed';      // sedang dikemas admin
+    public const STATUS_SHIPPED               = 'shipped';     // dikirim via kurir
+    public const STATUS_DELIVERED             = 'delivered';   // diterima
+    public const STATUS_CANCELLED             = 'cancelled';
+
+    public const PAYMENT_METHOD_MIDTRANS        = 'midtrans';
+    public const PAYMENT_METHOD_MANUAL_TRANSFER = 'manual_transfer';
 
     /** Human-readable Indonesian label per status. */
     public const STATUS_LABELS = [
-        self::STATUS_PENDING   => 'Menunggu Pembayaran',
-        self::STATUS_PAID      => 'Pembayaran Diterima',
-        self::STATUS_PACKED    => 'Sedang Dikemas',
-        self::STATUS_SHIPPED   => 'Dikirim ke Pelanggan',
-        self::STATUS_DELIVERED => 'Pesanan Selesai',
-        self::STATUS_CANCELLED => 'Pesanan Dibatalkan',
+        self::STATUS_PENDING               => 'Menunggu Pembayaran',
+        self::STATUS_AWAITING_VERIFICATION  => 'Menunggu Verifikasi Pembayaran',
+        self::STATUS_PAID                  => 'Pembayaran Diterima',
+        self::STATUS_PACKED                => 'Sedang Dikemas',
+        self::STATUS_SHIPPED               => 'Dikirim ke Pelanggan',
+        self::STATUS_DELIVERED             => 'Pesanan Selesai',
+        self::STATUS_CANCELLED             => 'Pesanan Dibatalkan',
     ];
 
     protected $fillable = [
@@ -48,6 +53,13 @@ class Order extends Model
         'midtrans_snap_token',
         'midtrans_order_id',
         'paid_at',
+        // Manual transfer
+        'payment_method',
+        'payment_proof_url',
+        'payment_proof_uploaded_at',
+        'payment_verified_by',
+        'payment_verified_at',
+        'payment_rejection_reason',
     ];
 
     /** Always include the synthesized timeline when serialised to JSON. */
@@ -56,12 +68,14 @@ class Order extends Model
     protected function casts(): array
     {
         return [
-            'subtotal'         => 'integer',
-            'operational_cost' => 'integer',
-            'shipping_cost'    => 'integer',
-            'discount'         => 'integer',
-            'total'            => 'integer',
-            'paid_at'          => 'datetime',
+            'subtotal'                  => 'integer',
+            'operational_cost'          => 'integer',
+            'shipping_cost'             => 'integer',
+            'discount'                  => 'integer',
+            'total'                     => 'integer',
+            'paid_at'                   => 'datetime',
+            'payment_proof_uploaded_at' => 'datetime',
+            'payment_verified_at'       => 'datetime',
         ];
     }
 

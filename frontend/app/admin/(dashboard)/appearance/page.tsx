@@ -78,6 +78,12 @@ export default function AdminAppearancePage() {
         whatsapp_greeting: fresh.whatsapp_greeting,
         whatsapp_prefilled_text: fresh.whatsapp_prefilled_text,
         whatsapp_link: fresh.whatsapp_link,
+        manual_transfer_enabled: fresh.manual_transfer_enabled ?? false,
+        bank_name: fresh.bank_name ?? null,
+        bank_account_number: fresh.bank_account_number ?? null,
+        bank_account_holder: fresh.bank_account_holder ?? null,
+        bank_branch: fresh.bank_branch ?? null,
+        bank_extra_note: fresh.bank_extra_note ?? null,
       };
       replaceSettings(publicShape);
 
@@ -320,6 +326,114 @@ export default function AdminAppearancePage() {
               Pesan ini akan otomatis muncul di kotak chat WhatsApp pengunjung sebelum dia menekan kirim.
             </p>
           </div>
+        </section>
+
+        {/* ------------- Pembayaran Transfer Manual ------------- */}
+        <section className="card p-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="font-semibold">Pembayaran Transfer Manual</h2>
+              <p className="text-xs text-gray-500">
+                Aktifkan untuk memberi pembeli alternatif selain Midtrans. Pembeli akan
+                melihat nomor rekening di bawah dan mengunggah bukti transfer dari
+                halaman pesanannya.
+              </p>
+            </div>
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.manual_transfer_enabled}
+                onChange={(e) => patch('manual_transfer_enabled', e.target.checked)}
+              />
+              Aktifkan
+            </label>
+          </div>
+
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div>
+              <label className="label">Nama Bank</label>
+              <input
+                className="input"
+                value={form.bank_name ?? ''}
+                onChange={(e) => patch('bank_name', e.target.value || null)}
+                placeholder="Contoh: BCA"
+                maxLength={80}
+              />
+            </div>
+            <div>
+              <label className="label">Cabang (opsional)</label>
+              <input
+                className="input"
+                value={form.bank_branch ?? ''}
+                onChange={(e) => patch('bank_branch', e.target.value || null)}
+                placeholder="Contoh: KCP Sudirman"
+                maxLength={120}
+              />
+            </div>
+            <div>
+              <label className="label">Nomor Rekening</label>
+              <input
+                className="input font-mono"
+                value={form.bank_account_number ?? ''}
+                onChange={(e) => patch('bank_account_number', e.target.value || null)}
+                placeholder="Contoh: 1234567890"
+                maxLength={60}
+              />
+            </div>
+            <div>
+              <label className="label">Atas Nama</label>
+              <input
+                className="input"
+                value={form.bank_account_holder ?? ''}
+                onChange={(e) => patch('bank_account_holder', e.target.value || null)}
+                placeholder="Contoh: PT Ranco Autoshop"
+                maxLength={120}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="label">Catatan untuk Pelanggan (opsional)</label>
+            <textarea
+              className="input"
+              rows={3}
+              value={form.bank_extra_note ?? ''}
+              onChange={(e) => patch('bank_extra_note', e.target.value || null)}
+              placeholder="Cth: Mohon transfer sesuai nominal hingga 3 digit terakhir agar mudah diverifikasi. Verifikasi 1x24 jam pada hari kerja."
+              maxLength={1000}
+            />
+          </div>
+
+          {form.manual_transfer_enabled && !form.bank_account_number && (
+            <div className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded p-2">
+              Toggle aktif, tapi nomor rekening belum diisi — opsi transfer manual
+              tidak akan muncul di halaman checkout sampai nomor rekening tersedia.
+            </div>
+          )}
+
+          {/* Live preview persis seperti yang akan dilihat customer di halaman order */}
+          {(form.bank_name || form.bank_account_number) && (
+            <div className="rounded-lg bg-gray-50 border border-gray-200 p-3 space-y-1">
+              <div className="text-xs text-gray-500 uppercase tracking-wide">Pratinjau untuk pelanggan</div>
+              <div className="font-semibold text-lg">
+                {form.bank_name || '—'}
+                {form.bank_branch && (
+                  <span className="ml-2 text-xs font-normal text-gray-500">Cabang {form.bank_branch}</span>
+                )}
+              </div>
+              <div className="font-mono text-xl tracking-wider">
+                {form.bank_account_number || '—'}
+              </div>
+              {form.bank_account_holder && (
+                <div className="text-sm text-gray-700">a.n. <b>{form.bank_account_holder}</b></div>
+              )}
+              {form.bank_extra_note && (
+                <div className="text-xs text-gray-600 whitespace-pre-line pt-1 border-t border-gray-200 mt-2">
+                  {form.bank_extra_note}
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         <div className="flex justify-end">

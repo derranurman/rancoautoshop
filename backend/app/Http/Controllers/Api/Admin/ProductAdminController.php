@@ -4,8 +4,10 @@ namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Product;
+use App\Models\ProductVariant;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -13,7 +15,7 @@ class ProductAdminController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $q = Product::query()->with('category:id,name,slug');
+        $q = Product::query()->with('category:id,name,slug', 'variants');
         if ($s = $request->string('search')->trim()->value()) {
             $q->where('name', 'like', "%{$s}%");
         }
@@ -73,20 +75,34 @@ class ProductAdminController extends Controller
     public function store(Request $request): JsonResponse
     {
         $data = $this->validated($request);
+        $variants = $data['variants'] ?? null;
+        unset($data['variants']);
+
         $data['slug'] = $this->uniqueSlug($data['name']);
         $data['operational_cost'] = $this->resolveOperationalCost($data, null);
-        $product = Product::create($data);
-        return response()->json(['data' => $product], 201);
+
+        $product = DB::transaction(function () use ($data, $variants) {
+            $product = Product::create($data);
+            if (is_array($variants)) {
+                $this->syncVariants($product, $variants);
+            }
+            return $product;
+        });
+
+        return response()->json(['data' => $product->load('category', 'variants')], 201);
     }
 
     public function show(Product $product): JsonResponse
     {
-        return response()->json(['data' => $product->load('category')]);
+        return response()->json(['data' => $product->load('category', 'variants')]);
     }
 
     public function update(Request $request, Product $product): JsonResponse
     {
         $data = $this->validated($request, $product->id);
+        $variants = array_key_exists('variants', $data) ? $data['variants'] : null;
+        unset($data['variants']);
+
         if (isset($data['name']) && $data['name'] !== $product->name) {
             $data['slug'] = $this->uniqueSlug($data['name'], $product->id);
         }
@@ -102,8 +118,14 @@ class ProductAdminController extends Controller
             }
         }
 
-        $product->update($data);
-        return response()->json(['data' => $product->fresh('category')]);
+        DB::transaction(function () use ($product, $data, $variants) {
+            $product->update($data);
+            if (is_array($variants)) {
+                $this->syncVariants($product, $variants);
+            }
+        });
+
+        return response()->json(['data' => $product->fresh('category', 'variants')]);
     }
 
     public function destroy(Product $product): JsonResponse
@@ -112,6 +134,11 @@ class ProductAdminController extends Controller
         foreach ((array) ($product->images ?? []) as $img) {
             $p = $this->relativeStoragePath($img);
             if ($p) Storage::disk('public')->delete($p);
+        }
+        // Variant images too — variants themselves cascade-delete via FK.
+        foreach ($product->variants as $v) {
+            $vp = $this->relativeStoragePath($v->image);
+            if ($vp) Storage::disk('public')->delete($vp);
         }
         $product->delete();
         return response()->json(['message' => 'deleted']);
@@ -153,7 +180,82 @@ class ProductAdminController extends Controller
             'images'           => ['nullable', 'array'],
             'images.*'         => ['string'], // either /storage/... path or full URL
             'is_active'        => ['boolean'],
+
+            // Variants — opsional. Kalau tidak dikirim, varian existing tidak diubah.
+            // Kalau dikirim (array), seluruh varian produk akan disinkronkan dengan
+            // payload ini: id baru = create, id existing = update, id existing yang
+            // tidak ada di payload = dihapus.
+            'variants'                  => ['sometimes', 'array'],
+            'variants.*.id'             => ['nullable', 'integer'],
+            'variants.*.name'           => ['required_with:variants', 'string', 'max:120'],
+            'variants.*.sku'            => ['nullable', 'string', 'max:80'],
+            'variants.*.stock'          => ['required_with:variants', 'integer', 'min:0'],
+            'variants.*.price_override' => ['nullable', 'integer', 'min:0'],
+            'variants.*.weight_override'=> ['nullable', 'integer', 'min:1'],
+            'variants.*.image'          => ['nullable', 'string'],
+            'variants.*.is_active'      => ['nullable', 'boolean'],
+            'variants.*.sort_order'     => ['nullable', 'integer', 'min:0'],
         ]);
+    }
+
+    /**
+     * Sinkronkan daftar varian milik suatu produk dengan payload dari admin.
+     *
+     * Aturan:
+     *   - Item dengan `id` yang masih ada di DB → update.
+     *   - Item tanpa `id` (atau id tidak dikenal) → create baru.
+     *   - Varian existing yang TIDAK ada di payload → hapus (file image dibersihkan).
+     *
+     * Setelah sync, `products.stock` di-mirror = total stok semua varian aktif
+     * supaya badge "Stok habis" di listing tetap benar tanpa harus query
+     * tambahan dari frontend.
+     */
+    protected function syncVariants(Product $product, array $rows): void
+    {
+        $existingIds = $product->variants()->pluck('id')->all();
+        $keepIds = [];
+
+        foreach ($rows as $i => $row) {
+            $payload = [
+                'name'            => trim((string) ($row['name'] ?? '')),
+                'sku'             => $row['sku'] ?? null,
+                'stock'           => (int) ($row['stock'] ?? 0),
+                'price_override'  => isset($row['price_override']) && $row['price_override'] !== '' && $row['price_override'] !== null
+                    ? (int) $row['price_override'] : null,
+                'weight_override' => isset($row['weight_override']) && $row['weight_override'] !== '' && $row['weight_override'] !== null
+                    ? (int) $row['weight_override'] : null,
+                'image'           => $row['image'] ?? null,
+                'is_active'       => array_key_exists('is_active', $row) ? (bool) $row['is_active'] : true,
+                'sort_order'      => (int) ($row['sort_order'] ?? $i),
+            ];
+            if ($payload['name'] === '') continue; // skip kosong defensif
+
+            $id = isset($row['id']) ? (int) $row['id'] : null;
+            if ($id && in_array($id, $existingIds, true)) {
+                $product->variants()->where('id', $id)->update($payload);
+                $keepIds[] = $id;
+            } else {
+                $created = $product->variants()->create($payload);
+                $keepIds[] = $created->id;
+            }
+        }
+
+        // Hapus varian yang tidak ada di payload.
+        $toDelete = array_diff($existingIds, $keepIds);
+        if (!empty($toDelete)) {
+            $deleting = ProductVariant::whereIn('id', $toDelete)->get();
+            foreach ($deleting as $v) {
+                $vp = $this->relativeStoragePath($v->image);
+                if ($vp) Storage::disk('public')->delete($vp);
+            }
+            ProductVariant::whereIn('id', $toDelete)->delete();
+        }
+
+        // Mirror total stok ke kolom produk untuk listing yang cepat.
+        $totalStock = (int) $product->variants()->where('is_active', true)->sum('stock');
+        if ($product->variants()->exists()) {
+            $product->forceFill(['stock' => $totalStock])->save();
+        }
     }
 
     /**

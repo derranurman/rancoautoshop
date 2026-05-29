@@ -8,7 +8,8 @@ import { api, apiError, formatRupiah } from '@/lib/api';
 import { useAuth, useCart } from '@/lib/stores';
 import { paySnap } from '@/lib/midtrans';
 import { COURIER_CODES, COURIERS, type CourierCode } from '@/lib/couriers';
-import type { Address } from '@/lib/types';
+import { useSiteSettings } from '@/lib/stores';
+import type { Address, PaymentMethod } from '@/lib/types';
 
 type Province = { province_id: string; province: string };
 type City = { city_id: string; province_id: string; type: string; city_name: string; postal_code: string };
@@ -51,9 +52,13 @@ function normName(s: string | null | undefined): string {
 /** Snapshot mini produk yang disimpan di sessionStorage untuk mode Beli Sekarang. */
 interface BuyNowItem {
   product_id: number;
+  /** Varian terpilih (kalau produk punya varian). */
+  variant_id?: number | null;
   quantity: number;
   _preview: {
     name: string;
+    /** Nama varian terpilih (cth: "Merah"). */
+    variant_name?: string | null;
     image: string | null;
     unit_price: number;
     weight: number;
@@ -75,6 +80,11 @@ function CheckoutPageInner() {
   const search = useSearchParams();
   const { user, loading: authLoading } = useAuth();
   const { cart, fetch: fetchCart } = useCart();
+  // Pengaturan site (untuk tahu apakah transfer manual diaktifkan + info rekening
+  // di section ringkasan). Sudah otomatis di-load di layout storefront.
+  const siteSettings = useSiteSettings((s) => s.settings);
+  const manualTransferAvailable = !!siteSettings.manual_transfer_enabled
+    && !!siteSettings.bank_account_number;
 
   // Mode Beli Sekarang: dipicu saat URL mengandung ?buy_now=1 dan ada item
   // di sessionStorage. Dalam mode ini, halaman ini TIDAK memakai keranjang
@@ -96,6 +106,7 @@ function CheckoutPageInner() {
   const [chosenCost, setChosenCost] = useState<Cost | null>(null);
   const [voucherCode, setVoucherCode] = useState('');
   const [discount, setDiscount] = useState(0);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('midtrans');
   const [submitting, setSubmitting] = useState(false);
 
   // Saved addresses
@@ -506,14 +517,17 @@ function CheckoutPageInner() {
         courier_service: chosenCost.service,
         shipping_cost: chosenCost.cost,
         voucher_code: voucherCode || undefined,
+        payment_method: paymentMethod,
       };
       // Mode Beli Sekarang: kirim payload buy_now supaya backend membuat
       // order hanya dari produk ini, tanpa menyentuh keranjang user.
       if (buyNow) {
-        payload.buy_now = {
+        const bn: Record<string, unknown> = {
           product_id: buyNow.product_id,
           quantity: buyNow.quantity,
         };
+        if (buyNow.variant_id) bn.variant_id = buyNow.variant_id;
+        payload.buy_now = bn;
       }
       const r = await api.post('/orders/checkout', payload);
       // Bersihkan snapshot Beli Sekarang setelah order berhasil dibuat,
@@ -525,6 +539,13 @@ function CheckoutPageInner() {
       const orderNumber = r.data.order.order_number;
       const token = r.data.snap_token as string | null;
       const isMock = !!r.data.mock;
+
+      // Untuk transfer manual, langsung loncat ke halaman order detail —
+      // di sana customer akan melihat info rekening + tombol upload bukti.
+      if (paymentMethod === 'manual_transfer') {
+        router.push(`/orders/${orderNumber}`);
+        return;
+      }
 
       if (!isMock && token) {
         await paySnap(token, {
@@ -582,6 +603,11 @@ function CheckoutPageInner() {
               />
               <div className="min-w-0 flex-1">
                 <div className="font-medium truncate">{buyNow._preview.name}</div>
+                {buyNow._preview.variant_name && (
+                  <div className="text-xs text-gray-600">
+                    Varian: <span className="font-medium">{buyNow._preview.variant_name}</span>
+                  </div>
+                )}
                 <div className="text-xs text-gray-600">
                   {buyNow.quantity} × {formatRupiah(buyNow._preview.unit_price)}
                 </div>
@@ -836,13 +862,69 @@ function CheckoutPageInner() {
         <div className="border-t border-gray-100 pt-2 flex justify-between font-bold">
           <span>Total</span><span>{formatRupiah(total)}</span>
         </div>
-        <div className="text-xs text-gray-500">Ongkir ditanggung pembeli.</div>
+
+        {/* Pilihan metode pembayaran. Manual transfer hanya muncul kalau admin
+            sudah mengaktifkan dan mengisi rekening di Pengaturan Tampilan. */}
+        <div className="border-t border-gray-100 pt-3 space-y-2">
+          <div className="text-sm font-semibold">Metode Pembayaran</div>
+          <label className={`flex items-start gap-2 rounded-lg border p-2 cursor-pointer ${paymentMethod === 'midtrans' ? 'border-brand bg-brand/5' : 'border-gray-200'}`}>
+            <input
+              type="radio"
+              name="payment_method"
+              value="midtrans"
+              checked={paymentMethod === 'midtrans'}
+              onChange={() => setPaymentMethod('midtrans')}
+              className="mt-1"
+            />
+            <div className="text-sm">
+              <div className="font-medium">Pembayaran Online (Midtrans)</div>
+              <div className="text-xs text-gray-500">
+                VA BCA/BNI/BRI/Mandiri/Permata, GoPay, ShopeePay, OVO, DANA, QRIS,
+                Indomaret/Alfamart, kartu kredit, paylater.
+              </div>
+            </div>
+          </label>
+          <label className={[
+            'flex items-start gap-2 rounded-lg border p-2',
+            !manualTransferAvailable ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+            paymentMethod === 'manual_transfer' ? 'border-brand bg-brand/5' : 'border-gray-200',
+          ].join(' ')}>
+            <input
+              type="radio"
+              name="payment_method"
+              value="manual_transfer"
+              disabled={!manualTransferAvailable}
+              checked={paymentMethod === 'manual_transfer'}
+              onChange={() => setPaymentMethod('manual_transfer')}
+              className="mt-1"
+            />
+            <div className="text-sm">
+              <div className="font-medium">Transfer Manual</div>
+              {manualTransferAvailable ? (
+                <div className="text-xs text-gray-500">
+                  Transfer ke <b>{siteSettings.bank_name}</b>{' '}
+                  <span className="font-mono">{siteSettings.bank_account_number}</span>
+                  {siteSettings.bank_account_holder ? ` a.n. ${siteSettings.bank_account_holder}` : ''}.
+                  Upload bukti transfer setelah membuat pesanan.
+                </div>
+              ) : (
+                <div className="text-xs text-gray-500">Belum tersedia.</div>
+              )}
+            </div>
+          </label>
+        </div>
+
         <button onClick={onSubmit} disabled={submitting || !chosenCost} className="btn-primary w-full mt-2">
-          {submitting ? 'Memproses...' : 'Bayar Sekarang'}
+          {submitting
+            ? 'Memproses...'
+            : paymentMethod === 'manual_transfer'
+              ? 'Buat Pesanan & Lihat Rekening'
+              : 'Bayar Sekarang'}
         </button>
         <div className="text-[11px] text-gray-500 text-center pt-1">
-          Pembayaran via Midtrans: BCA / BNI / BRI / Mandiri / Permata VA, GoPay,
-          ShopeePay, OVO, DANA, QRIS, Indomaret/Alfamart, kartu kredit.
+          {paymentMethod === 'manual_transfer'
+            ? 'Setelah pesanan dibuat, transfer ke rekening lalu unggah bukti dari halaman pesanan.'
+            : 'Pembayaran via Midtrans: BCA / BNI / BRI / Mandiri / Permata VA, GoPay, ShopeePay, OVO, DANA, QRIS, Indomaret/Alfamart, kartu kredit.'}
         </div>
       </div>
     </div>

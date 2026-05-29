@@ -30,6 +30,13 @@ class SiteSetting extends Model
         'whatsapp_label',
         'whatsapp_greeting',
         'whatsapp_prefilled_text',
+        // Bank account for manual bank transfer payment
+        'manual_transfer_enabled',
+        'bank_name',
+        'bank_account_number',
+        'bank_account_holder',
+        'bank_branch',
+        'bank_extra_note',
     ];
 
     protected $appends = [
@@ -40,7 +47,8 @@ class SiteSetting extends Model
     protected function casts(): array
     {
         return [
-            'whatsapp_enabled' => 'boolean',
+            'whatsapp_enabled'        => 'boolean',
+            'manual_transfer_enabled' => 'boolean',
         ];
     }
 
@@ -71,6 +79,16 @@ class SiteSetting extends Model
             'whatsapp_greeting'       => $this->whatsapp_greeting,
             'whatsapp_prefilled_text' => $this->whatsapp_prefilled_text,
             'whatsapp_link'           => $this->whatsapp_link,
+
+            // Manual bank transfer — toggle + info rekening yang akan ditampilkan
+            // di halaman order detail (customer login). Aman dipublikasikan: ini
+            // memang nomor rekening pembayaran toko, bukan info sensitif.
+            'manual_transfer_enabled' => (bool) $this->manual_transfer_enabled,
+            'bank_name'               => $this->bank_name,
+            'bank_account_number'     => $this->bank_account_number,
+            'bank_account_holder'     => $this->bank_account_holder,
+            'bank_branch'             => $this->bank_branch,
+            'bank_extra_note'         => $this->bank_extra_note,
         ];
     }
 

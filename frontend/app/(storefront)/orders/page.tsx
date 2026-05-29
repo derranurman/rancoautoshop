@@ -8,12 +8,13 @@ import { useAuth } from '@/lib/stores';
 import type { Order } from '@/lib/types';
 
 const STATUS_LABEL: Record<string, { label: string; color: string }> = {
-  pending:   { label: 'Menunggu Pembayaran', color: 'bg-yellow-100 text-yellow-800' },
-  paid:      { label: 'Dibayar',              color: 'bg-blue-100 text-blue-800' },
-  packed:    { label: 'Dikemas',              color: 'bg-indigo-100 text-indigo-800' },
-  shipped:   { label: 'Dikirim',              color: 'bg-purple-100 text-purple-800' },
-  delivered: { label: 'Selesai',              color: 'bg-green-100 text-green-800' },
-  cancelled: { label: 'Dibatalkan',           color: 'bg-red-100 text-red-700' },
+  pending:   { label: 'Menunggu Pembayaran',     color: 'bg-yellow-100 text-yellow-800' },
+  awaiting_verification: { label: 'Verifikasi Admin', color: 'bg-amber-100 text-amber-800' },
+  paid:      { label: 'Dibayar',                  color: 'bg-blue-100 text-blue-800' },
+  packed:    { label: 'Dikemas',                  color: 'bg-indigo-100 text-indigo-800' },
+  shipped:   { label: 'Dikirim',                  color: 'bg-purple-100 text-purple-800' },
+  delivered: { label: 'Selesai',                  color: 'bg-green-100 text-green-800' },
+  cancelled: { label: 'Dibatalkan',               color: 'bg-red-100 text-red-700' },
 };
 
 export default function OrdersPage() {
@@ -40,7 +41,7 @@ export default function OrdersPage() {
       ) : (
         <div className="space-y-3">
           {orders.map((o) => {
-            const s = STATUS_LABEL[o.status];
+            const s = STATUS_LABEL[o.status] ?? { label: o.status, color: 'bg-gray-100 text-gray-700' };
             return (
               <Link key={o.id} href={`/orders/${o.order_number}`}
                 className="card p-4 flex justify-between items-center hover:shadow-sm transition">

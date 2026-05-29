@@ -37,6 +37,22 @@ export interface Address {
   updated_at?: string;
 }
 
+export interface ProductVariant {
+  id: number;
+  name: string;                    // contoh: "Merah", "Biru", "Hitam"
+  sku: string | null;
+  stock: number;
+  /** Harga dasar override (null = ikut produk induk). */
+  price_override: number | null;
+  /** Harga dasar efektif (override jika ada, kalau tidak fallback produk). */
+  effective_price: number;
+  /** Harga jual akhir = effective_price + operational_cost produk. */
+  selling_price: number;
+  /** Berat efektif gram (override / fallback). */
+  weight: number;
+  image: string | null;
+}
+
 export interface Product {
   id: number;
   slug: string;
@@ -49,11 +65,15 @@ export interface Product {
   images: string[];
   description?: string;
   category?: { id: number; name: string; slug: string } | null;
+  /** True kalau produk punya minimal satu varian aktif. */
+  has_variants?: boolean;
+  variants?: ProductVariant[];
 }
 
 export interface CartItem {
   id: number;
   product_id: number;
+  variant_id: number | null;
   name: string;
   slug: string;
   image: string | null;
@@ -64,6 +84,8 @@ export interface CartItem {
   subtotal: number;
   stock: number;
   weight: number;
+  variant_name: string | null;
+  variant_sku: string | null;
 }
 
 export interface Cart {
@@ -75,12 +97,19 @@ export interface Cart {
 }
 
 export type OrderStatus =
-  | 'pending' | 'paid' | 'packed' | 'shipped' | 'delivered' | 'cancelled';
+  | 'pending'
+  | 'awaiting_verification'
+  | 'paid' | 'packed' | 'shipped' | 'delivered' | 'cancelled';
+
+export type PaymentMethod = 'midtrans' | 'manual_transfer';
 
 export interface OrderItem {
   id: number;
   product_id: number | null;
+  variant_id: number | null;
   product_name: string;
+  variant_name: string | null;
+  variant_sku: string | null;
   price_snapshot: number;
   operational_cost_snapshot: number;
   quantity: number;
@@ -116,6 +145,13 @@ export interface Order {
   shipping_address: string;
   midtrans_snap_token?: string | null;
   paid_at?: string | null;
+  /** Metode pembayaran yang dipilih pembeli saat checkout. */
+  payment_method?: PaymentMethod;
+  /** URL bukti transfer manual yang sudah diunggah customer (`/storage/...`). */
+  payment_proof_url?: string | null;
+  payment_proof_uploaded_at?: string | null;
+  payment_verified_at?: string | null;
+  payment_rejection_reason?: string | null;
   created_at: string;
   items?: OrderItem[];
   tracking_events?: OrderTrackingEvent[];
@@ -143,9 +179,30 @@ export interface SiteSettings {
   whatsapp_greeting: string;
   whatsapp_prefilled_text: string;
   whatsapp_link: string | null;         // siap-pakai href ke wa.me
+
+  /** Pembayaran transfer manual — info rekening yang ditampilkan ke customer. */
+  manual_transfer_enabled: boolean;
+  bank_name: string | null;
+  bank_account_number: string | null;
+  bank_account_holder: string | null;
+  bank_branch: string | null;
+  bank_extra_note: string | null;
 }
 
-/** Versi raw (mentah, tanpa normalisasi) yang dipakai admin form. */
+/**
+ * Info rekening tujuan transfer manual yang ditemani oleh response
+ * `GET /orders/{orderNumber}` (kalau order tersebut pakai metode `manual_transfer`).
+ * Bisa juga muncul di response `POST /orders/checkout` saat pembeli baru
+ * memilih transfer manual.
+ */
+export interface BankAccountInfo {
+  enabled: boolean;
+  bank_name: string | null;
+  account_number: string | null;
+  account_holder: string | null;
+  branch: string | null;
+  note: string | null;
+}
 export interface SiteSettingsAdmin extends Omit<SiteSettings, 'whatsapp_number' | 'whatsapp_link'> {
   whatsapp_number: string | null;            // input mentah admin
   whatsapp_number_normalized: string | null; // hasil normalisasi (read-only preview)
