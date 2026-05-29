@@ -51,6 +51,9 @@ class SiteSetting extends Model
         'sender_postal_code',
         // Low-stock global
         'low_stock_threshold',
+        // Shipping provider
+        'biteship_enabled',
+        'default_shipping_provider',
     ];
 
     protected $appends = [
@@ -68,6 +71,7 @@ class SiteSetting extends Model
             'cod_max_total'           => 'integer',
             'cod_extra_fee'           => 'integer',
             'low_stock_threshold'     => 'integer',
+            'biteship_enabled'        => 'boolean',
         ];
     }
 
@@ -119,6 +123,12 @@ class SiteSetting extends Model
 
             // Threshold global untuk indikator "stok hampir habis" di storefront.
             'low_stock_threshold'     => (int) ($this->low_stock_threshold ?: 5),
+
+            // Shipping provider — frontend pakai untuk tahu apakah opsi
+            // Biteship muncul di dropdown checkout. API key sengaja tidak
+            // diekspos ke publik (cukup tahu enabled atau tidak).
+            'biteship_enabled'         => (bool) $this->biteship_enabled,
+            'default_shipping_provider'=> $this->default_shipping_provider ?: 'rajaongkir',
 
             // Sender info SENGAJA tidak diekspos di endpoint publik — itu
             // alamat gudang admin yang tidak relevan ke storefront. Diakses

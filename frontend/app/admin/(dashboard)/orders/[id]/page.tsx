@@ -121,6 +121,45 @@ export default function AdminOrderDetailPage() {
     } finally { setBusy(false); }
   }
 
+  async function biteshipCreate() {
+    if (!confirm('Buat pickup Biteship untuk order ini? Biteship akan menjadwalkan kurir & memberi nomor resi.')) return;
+    setBusy(true);
+    try {
+      const r = await api.post(`/admin/orders/${id}/biteship/create`);
+      setOrder(r.data.data);
+      toast.success(r.data.data?.tracking_number
+        ? `Pickup terjadwal. Resi: ${r.data.data.tracking_number}`
+        : 'Pickup terjadwal. Resi akan terbit setelah paket diambil kurir.'
+      );
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally { setBusy(false); }
+  }
+
+  async function biteshipRefresh() {
+    setBusy(true);
+    try {
+      const r = await api.post(`/admin/orders/${id}/biteship/refresh`);
+      setOrder(r.data.data);
+      toast.success('Status Biteship diperbarui.');
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally { setBusy(false); }
+  }
+
+  async function biteshipCancel() {
+    const reason = prompt('Alasan cancel pickup Biteship? (opsional)') ?? '';
+    if (!confirm('Yakin batalkan pickup Biteship? Status order app TIDAK ikut otomatis cancel.')) return;
+    setBusy(true);
+    try {
+      const r = await api.post(`/admin/orders/${id}/biteship/cancel`, { reason });
+      setOrder(r.data.data);
+      toast.success('Pickup Biteship dibatalkan.');
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally { setBusy(false); }
+  }
+
   if (!order) return <div className="text-gray-500">Memuat...</div>;
 
   const transitions = (order.payment_method === 'cod'
@@ -172,6 +211,19 @@ export default function AdminOrderDetailPage() {
               : 'Midtrans'}
           </span>
         </div>
+        <div className="flex justify-between">
+          <span>Provider Pengiriman</span>
+          <span className={[
+            'text-xs font-semibold uppercase tracking-wide rounded px-2 py-0.5',
+            order.shipping_provider === 'biteship' ? 'bg-emerald-100 text-emerald-800' :
+            order.shipping_provider === 'manual'   ? 'bg-gray-200 text-gray-800' :
+            'bg-blue-100 text-blue-800',
+          ].join(' ')}>
+            {order.shipping_provider === 'biteship' ? 'Biteship'
+              : order.shipping_provider === 'manual' ? 'Manual'
+              : 'RajaOngkir'}
+          </span>
+        </div>
         <div className="flex justify-between"><span>Penerima</span><span>{order.recipient_name} — {order.recipient_phone}</span></div>
         <div className="whitespace-pre-line text-gray-600">{order.shipping_address}</div>
         {order.tracking_number && (
@@ -218,6 +270,86 @@ export default function AdminOrderDetailPage() {
           <span>Total</span><span>{formatRupiah(order.total)}</span>
         </div>
       </div>
+
+      {/* -------- Biteship: pickup management -------- */}
+      {order.shipping_provider === 'biteship' && (
+        <div className="card p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div>
+              <h2 className="font-semibold flex items-center gap-2">
+                Pengiriman via Biteship
+                <span className="text-[10px] uppercase tracking-wide bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">
+                  {order.biteship_status ?? 'belum dibuat'}
+                </span>
+              </h2>
+              <p className="text-xs text-gray-500">
+                {order.biteship_courier_code?.toUpperCase()} {order.biteship_courier_service_code?.toUpperCase()}
+              </p>
+            </div>
+            {!order.biteship_order_id ? (
+              <button
+                type="button"
+                onClick={biteshipCreate}
+                disabled={busy || (order.status !== 'paid' && order.status !== 'packed')}
+                className="btn-primary disabled:opacity-50"
+                title={order.status !== 'paid' && order.status !== 'packed'
+                  ? 'Order harus berstatus PAID atau PACKED untuk bisa di-pickup'
+                  : 'Buat pickup ke Biteship & dapat resi'}
+              >
+                Buat Pickup & AWB
+              </button>
+            ) : (
+              <div className="flex gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={biteshipRefresh}
+                  disabled={busy}
+                  className="btn-outline disabled:opacity-50"
+                >
+                  Refresh Status
+                </button>
+                <button
+                  type="button"
+                  onClick={biteshipCancel}
+                  disabled={busy || order.biteship_status === 'cancelled' || order.status === 'delivered'}
+                  className="btn-outline text-red-600 border-red-300 disabled:opacity-50"
+                >
+                  Cancel Pickup
+                </button>
+              </div>
+            )}
+          </div>
+
+          {order.biteship_order_id && (
+            <div className="rounded bg-gray-50 border border-gray-200 p-3 text-xs space-y-1">
+              <div>
+                <span className="text-gray-500">Biteship Order ID:</span>{' '}
+                <span className="font-mono">{order.biteship_order_id}</span>
+              </div>
+              {order.tracking_number ? (
+                <div>
+                  <span className="text-gray-500">Resi (AWB):</span>{' '}
+                  <span className="font-mono font-semibold">{order.tracking_number}</span>
+                </div>
+              ) : (
+                <div className="text-amber-700">
+                  Resi belum terbit. Untuk kurir yang tidak instant-AWB (mis. SiCepat reg), nomor resi akan
+                  muncul setelah paket benar-benar di-pickup. Klik <b>Refresh Status</b> berkala atau biarkan
+                  webhook update otomatis.
+                </div>
+              )}
+            </div>
+          )}
+
+          {!order.biteship_order_id && (
+            <div className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded p-2">
+              Klik <b>Buat Pickup & AWB</b> untuk mengirim order ke Biteship. Biteship akan
+              menjadwalkan kurir & memberi nomor resi (untuk kurir instant-AWB seperti J&T REG/JNE REG,
+              resi langsung muncul; untuk yang lain, terbit setelah pickup).
+            </div>
+          )}
+        </div>
+      )}
 
       {/* -------- Manual transfer: lihat & verifikasi bukti -------- */}
       {order.payment_method === 'manual_transfer' && (

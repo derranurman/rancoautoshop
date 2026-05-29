@@ -90,6 +90,8 @@ export default function AdminAppearancePage() {
         cod_extra_fee: fresh.cod_extra_fee ?? 0,
         cod_extra_note: fresh.cod_extra_note ?? null,
         low_stock_threshold: fresh.low_stock_threshold ?? 5,
+        biteship_enabled: fresh.biteship_enabled ?? false,
+        default_shipping_provider: fresh.default_shipping_provider ?? 'rajaongkir',
       };
       replaceSettings(publicShape);
 
@@ -575,6 +577,59 @@ export default function AdminAppearancePage() {
                 placeholder="12345"
                 maxLength={10}
               />
+            </div>
+          </div>
+        </section>
+
+        {/* ------------- Biteship (Aggregator Multi-Kurir) ------------- */}
+        <section className="card p-4 space-y-4">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div>
+              <h2 className="font-semibold">Biteship — Aggregator Multi-Kurir</h2>
+              <p className="text-xs text-gray-500">
+                Aktifkan untuk kasih opsi pengiriman via Biteship (J&T, JNE, SiCepat,
+                Anteraja, dll. dalam satu list) di samping RajaOngkir. API key di atur
+                di file <code>.env</code> (BITESHIP_API_KEY) supaya tidak ter-commit ke repo.
+              </p>
+            </div>
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.biteship_enabled}
+                onChange={(e) => patch('biteship_enabled', e.target.checked)}
+              />
+              Aktifkan
+            </label>
+          </div>
+
+          <div>
+            <label className="label">Provider Default di Checkout</label>
+            <select
+              className="input max-w-xs"
+              value={form.default_shipping_provider}
+              onChange={(e) => patch('default_shipping_provider', e.target.value as 'rajaongkir' | 'biteship' | 'manual')}
+            >
+              <option value="rajaongkir">RajaOngkir</option>
+              <option value="biteship" disabled={!form.biteship_enabled}>Biteship</option>
+            </select>
+            <p className="text-xs text-gray-500 mt-1">
+              Customer tetap bisa toggle di checkout. Ini hanya menentukan opsi yang dipilih duluan.
+            </p>
+          </div>
+
+          <div className="rounded bg-gray-50 border border-gray-200 p-3 text-xs space-y-1">
+            <div className="font-semibold text-gray-700">Cara setup test mode:</div>
+            <ol className="list-decimal pl-4 space-y-0.5 text-gray-600">
+              <li>Daftar di <a className="text-brand hover:underline" href="https://biteship.com" target="_blank" rel="noreferrer">biteship.com</a> (gratis).</li>
+              <li>Buka <a className="text-brand hover:underline" href="https://dashboard.biteship.com/integrations" target="_blank" rel="noreferrer">dashboard.biteship.com/integrations</a>.</li>
+              <li>Aktifkan toggle <b>&ldquo;Mode Testing&rdquo;</b> di sidebar.</li>
+              <li>Klik <b>Tambah Kunci API</b> → simpan key (hanya muncul sekali).</li>
+              <li>Submit aktivasi Order API dari dashboard.</li>
+              <li>Set <code>BITESHIP_API_KEY=...</code> di <code>backend/.env</code> → restart server.</li>
+              <li>Atur webhook URL di Biteship: <code>https://your-domain.com/api/webhooks/biteship</code> + <code>BITESHIP_WEBHOOK_SECRET</code> yang sama dengan di .env.</li>
+            </ol>
+            <div className="text-amber-700 mt-2">
+              💡 Sandbox: Order API <b>SIMULASI</b> (gratis, dapat AWB dummy). Rates &amp; Tracking pakai data nyata &amp; tetap berbayar.
             </div>
           </div>
         </section>

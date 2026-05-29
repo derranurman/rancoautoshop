@@ -70,6 +70,9 @@ class OrderController extends Controller
             'shipping_cost'         => ['required', 'integer', 'min:0'],
             'voucher_code'          => ['nullable', 'string', 'max:40'],
             'payment_method'        => ['nullable', 'string', 'in:midtrans,manual_transfer,cod'],
+            'shipping_provider'     => ['nullable', 'string', 'in:rajaongkir,biteship,manual'],
+            'biteship_courier_code' => ['nullable', 'string', 'max:50'],
+            'biteship_courier_service_code' => ['nullable', 'string', 'max:50'],
             'buy_now'               => ['nullable', 'array'],
             'buy_now.product_id'    => ['required_with:buy_now', 'integer'],
             'buy_now.variant_id'    => ['nullable', 'integer'],
@@ -231,6 +234,9 @@ class OrderController extends Controller
                 'shipping_address'  => $data['shipping_address'],
                 'midtrans_order_id' => null, // set after snap (Midtrans only)
                 'payment_method'    => $paymentMethod,
+                'shipping_provider' => $data['shipping_provider'] ?? Order::SHIPPING_PROVIDER_RAJAONGKIR,
+                'biteship_courier_code' => $data['biteship_courier_code'] ?? null,
+                'biteship_courier_service_code' => $data['biteship_courier_service_code'] ?? null,
             ]);
 
             foreach ($itemsData as $d) {

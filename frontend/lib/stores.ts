@@ -161,6 +161,9 @@ const DEFAULT_SETTINGS: SiteSettings = {
   cod_extra_note: null,
 
   low_stock_threshold: 5,
+
+  biteship_enabled: false,
+  default_shipping_provider: 'rajaongkir',
 };
 
 const SETTINGS_CACHE_KEY = 'ranco.siteSettings';

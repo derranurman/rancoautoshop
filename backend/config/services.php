@@ -25,4 +25,10 @@ return [
         'base_url'        => env('RAJAONGKIR_BASE_URL', 'https://api.rajaongkir.com/starter'),
         'origin_city_id'  => env('RAJAONGKIR_ORIGIN_CITY_ID', '152'),
     ],
+
+    'biteship' => [
+        'api_key'        => env('BITESHIP_API_KEY'),
+        'base_url'       => env('BITESHIP_BASE_URL', 'https://api.biteship.com'),
+        'webhook_secret' => env('BITESHIP_WEBHOOK_SECRET'),
+    ],
 ];

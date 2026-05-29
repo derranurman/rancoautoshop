@@ -30,6 +30,7 @@ Route::post('/vouchers/check',     [VoucherController::class, 'check']);
 Route::get('/shipping/provinces',  [ShippingController::class, 'provinces']);
 Route::get('/shipping/cities',     [ShippingController::class, 'cities']);
 Route::post('/shipping/cost',      [ShippingController::class, 'cost']);
+Route::post('/shipping/biteship/rates', [ShippingController::class, 'biteshipRates']);
 
 // Public site settings (logo, hero, footer, WA widget) — dipakai storefront.
 Route::get('/site-settings',       [SiteSettingsController::class, 'show']);
@@ -45,6 +46,7 @@ Route::get('/auth/google/callback',[AuthController::class, 'googleCallback']);
 
 // ----------------- Webhooks -----------------
 Route::post('/payments/midtrans/notification', [PaymentController::class, 'midtransNotification']);
+Route::post('/webhooks/biteship', [\App\Http\Controllers\Api\BiteshipWebhookController::class, 'handle']);
 
 // ----------------- Authenticated (both roles) -----------------
 Route::middleware('auth:sanctum')->group(function () {
@@ -96,6 +98,10 @@ Route::middleware('auth:sanctum')->group(function () {
         // Verifikasi pembayaran transfer manual
         Route::post('/orders/{order}/approve-payment', [OrderAdminController::class, 'approvePayment']);
         Route::post('/orders/{order}/reject-payment',  [OrderAdminController::class, 'rejectPayment']);
+        // Biteship integration — admin only
+        Route::post('/orders/{order}/biteship/create',  [OrderAdminController::class, 'biteshipCreate']);
+        Route::post('/orders/{order}/biteship/refresh', [OrderAdminController::class, 'biteshipRefresh']);
+        Route::post('/orders/{order}/biteship/cancel',  [OrderAdminController::class, 'biteshipCancel']);
 
         Route::get('/users',                 [UserAdminController::class, 'index']);
         Route::post('/users',                [UserAdminController::class, 'store']);
