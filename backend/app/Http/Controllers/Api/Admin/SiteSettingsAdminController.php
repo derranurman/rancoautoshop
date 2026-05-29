@@ -76,6 +76,10 @@ class SiteSettingsAdminController extends Controller
 
             // Default global low-stock threshold.
             'low_stock_threshold'     => ['sometimes', 'integer', 'min:0', 'max:1000'],
+
+            // Biteship
+            'biteship_enabled'         => ['sometimes', 'boolean'],
+            'default_shipping_provider'=> ['sometimes', 'string', 'in:rajaongkir,biteship,manual'],
         ]);
 
         $s = SiteSetting::current();

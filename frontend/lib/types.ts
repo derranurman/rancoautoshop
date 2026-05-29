@@ -165,6 +165,15 @@ export interface Order {
   payment_proof_uploaded_at?: string | null;
   payment_verified_at?: string | null;
   payment_rejection_reason?: string | null;
+
+  /** Provider pengiriman: rajaongkir/biteship/manual. */
+  shipping_provider?: 'rajaongkir' | 'biteship' | 'manual';
+  /** ID order di Biteship — dipakai admin untuk refresh tracking & cancel. */
+  biteship_order_id?: string | null;
+  /** Kode kurir Biteship (kadang beda dari `courier`, mis. "jt" vs "jnt"). */
+  biteship_courier_code?: string | null;
+  biteship_courier_service_code?: string | null;
+  biteship_status?: string | null;
   created_at: string;
   items?: OrderItem[];
   tracking_events?: OrderTrackingEvent[];
@@ -210,6 +219,11 @@ export interface SiteSettings {
 
   /** Threshold global "stok hampir habis" untuk indikator di storefront. */
   low_stock_threshold: number;
+
+  /** Apakah Biteship sudah diaktifkan admin (paralel dengan RajaOngkir). */
+  biteship_enabled: boolean;
+  /** Provider default yang dipilih duluan di checkout. */
+  default_shipping_provider: 'rajaongkir' | 'biteship' | 'manual';
 }
 
 /**

@@ -7,6 +7,7 @@ use App\Models\Order;
 use App\Models\OrderTrackingEvent;
 use App\Models\Product;
 use App\Models\ProductVariant;
+use App\Services\BiteshipService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -246,4 +247,175 @@ class OrderAdminController extends Controller
             'data' => $order->fresh(['items', 'trackingEvents']),
         ]);
     }
+
+    /**
+     * Buat order Biteship untuk pesanan ini → Biteship menjadwalkan pickup
+     * & memberi nomor resi (waybill_id). Resi otomatis tersimpan ke
+     * `tracking_number` supaya label, halaman customer, & UI lain tidak
+     * perlu cabang khusus untuk Biteship.
+     *
+     * Hanya valid kalau:
+     *   - shipping_provider = biteship
+     *   - belum punya biteship_order_id (idempotent: kalau sudah ada, return existing)
+     *   - status order: paid / packed (siap kirim)
+     */
+    public function biteshipCreate(Request $request, Order $order, BiteshipService $biteship): JsonResponse
+    {
+        abort_unless(
+            $order->shipping_provider === Order::SHIPPING_PROVIDER_BITESHIP,
+            422,
+            'Pesanan ini tidak menggunakan provider Biteship.'
+        );
+        abort_unless(
+            in_array($order->status, [Order::STATUS_PAID, Order::STATUS_PACKED], true),
+            422,
+            'Order Biteship hanya bisa dibuat saat status PAID atau PACKED.'
+        );
+
+        // Idempotent: kalau sudah pernah dibuat, kembalikan order existing
+        // tanpa hit API lagi (admin mungkin double-click). Refresh status
+        // dari Biteship supaya admin tetap lihat data terbaru.
+        if ($order->biteship_order_id) {
+            return $this->biteshipRefresh($order, $biteship);
+        }
+
+        $r = $biteship->createOrder($order);
+        if (!empty($r['error']) || empty($r['order'])) {
+            return response()->json([
+                'data'  => $order->fresh(['items', 'trackingEvents']),
+                'error' => $r['error'] ?? 'Gagal membuat order Biteship.',
+            ], 422);
+        }
+
+        $bo = $r['order'];
+        $waybill = $bo['courier']['waybill_id'] ?? null;
+        $statusFromBiteship = $bo['status'] ?? 'confirmed';
+        $patch = [
+            'biteship_order_id' => (string) ($bo['id'] ?? ''),
+            'biteship_status'   => $statusFromBiteship,
+            'biteship_raw'      => $bo,
+        ];
+        // Kalau Biteship langsung kasih AWB (instant waybill), tulis ke
+        // tracking_number agar label & halaman customer langsung pakai resi
+        // asli. Untuk kurir non-instant, AWB akan masuk via webhook nanti.
+        if ($waybill) {
+            $patch['tracking_number'] = $waybill;
+        }
+        $order->update($patch);
+
+        // Tambahkan tracking event sehingga muncul di timeline customer.
+        $note = $waybill
+            ? 'Pickup terjadwal via Biteship. No. resi: '.$waybill
+            : 'Pickup terjadwal via Biteship. Nomor resi akan terbit setelah paket dipick-up kurir.';
+        $order->addTrackingEvent(
+            Order::STATUS_PACKED,
+            $note,
+            OrderTrackingEvent::SOURCE_SYSTEM,
+        );
+
+        return response()->json([
+            'data'    => $order->fresh(['items', 'trackingEvents']),
+            'biteship'=> $bo,
+        ]);
+    }
+
+    /**
+     * Polling tracking — admin klik refresh untuk fetch status terbaru +
+     * apply ke order kita. Berguna kalau webhook tidak terkirim (network
+     * issue, Biteship belum dikonfigurasi webhook secret).
+     */
+    public function biteshipRefresh(Order $order, BiteshipService $biteship): JsonResponse
+    {
+        if (!$order->biteship_order_id) {
+            return response()->json([
+                'data' => $order->fresh(['items', 'trackingEvents']),
+                'error'=> 'Order ini belum punya biteship_order_id.',
+            ], 422);
+        }
+
+        $resp = $biteship->tracking($order->biteship_order_id);
+        if (!empty($resp['error'])) {
+            return response()->json([
+                'data' => $order->fresh(['items', 'trackingEvents']),
+                'error'=> $resp['error'],
+            ], 422);
+        }
+
+        $patch = ['biteship_raw' => $resp];
+        $waybill = $resp['waybill_id'] ?? ($resp['courier']['waybill_id'] ?? null);
+        if ($waybill && $waybill !== $order->tracking_number) {
+            $patch['tracking_number'] = $waybill;
+        }
+        // Status terbaru — biteship `status` ada di top-level pada response trackings.
+        $bs = $resp['status'] ?? ($resp['order']['status'] ?? null);
+        if ($bs && $bs !== $order->biteship_status) {
+            $patch['biteship_status'] = $bs;
+            $internal = BiteshipService::mapBiteshipStatus($bs);
+            if ($internal && $internal !== $order->status) {
+                $patch['status'] = $internal;
+                if ($internal === Order::STATUS_DELIVERED && !$order->paid_at && $order->payment_method === Order::PAYMENT_METHOD_COD) {
+                    $patch['paid_at'] = now();
+                }
+            }
+        }
+        $order->update($patch);
+
+        // Pull last few history events dari Biteship → tracking_events kita
+        // (tetap dedup berdasarkan note untuk menghindari duplikasi saat
+        // refresh berulang). History format dari Biteship: `history[]`.
+        $history = $resp['history'] ?? [];
+        if (is_array($history)) {
+            $existingNotes = $order->trackingEvents->pluck('note')->all();
+            foreach ($history as $h) {
+                $note = trim((string) ($h['note'] ?? $h['status'] ?? ''));
+                if ($note === '' || in_array($note, $existingNotes, true)) continue;
+                $order->addTrackingEvent(
+                    BiteshipService::mapBiteshipStatus((string) ($h['status'] ?? '')),
+                    $note,
+                    OrderTrackingEvent::SOURCE_WEBHOOK,
+                    $h['service_type'] ?? null,
+                );
+            }
+        }
+
+        return response()->json([
+            'data'     => $order->fresh(['items', 'trackingEvents']),
+            'biteship' => $resp,
+        ]);
+    }
+
+    /**
+     * Cancel order Biteship (mis. salah pilih kurir, atau customer batalkan
+     * sebelum pickup). HANYA cancel ke Biteship, tidak otomatis cancel order
+     * kita — admin tetap harus klik Cancel manual kalau benar-benar mau
+     * meng-cancel order beserta restock-nya.
+     */
+    public function biteshipCancel(Request $request, Order $order, BiteshipService $biteship): JsonResponse
+    {
+        $reason = (string) $request->input('reason', '');
+        if (!$order->biteship_order_id) {
+            return response()->json([
+                'data' => $order->fresh(['items', 'trackingEvents']),
+                'error'=> 'Order ini tidak terhubung Biteship.',
+            ], 422);
+        }
+        $err = $biteship->cancelOrder($order->biteship_order_id, $reason !== '' ? $reason : null);
+        if ($err) {
+            return response()->json([
+                'data' => $order->fresh(['items', 'trackingEvents']),
+                'error'=> $err,
+            ], 422);
+        }
+        $order->update([
+            'biteship_status' => 'cancelled',
+        ]);
+        $order->addTrackingEvent(
+            null,
+            'Pickup Biteship dibatalkan oleh admin'.($reason !== '' ? ': '.$reason : '.'),
+            OrderTrackingEvent::SOURCE_ADMIN,
+        );
+        return response()->json(['data' => $order->fresh(['items', 'trackingEvents'])]);
+    }
 }
+
+

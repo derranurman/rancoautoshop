@@ -24,6 +24,10 @@ class Order extends Model
     public const PAYMENT_METHOD_MANUAL_TRANSFER = 'manual_transfer';
     public const PAYMENT_METHOD_COD             = 'cod';
 
+    public const SHIPPING_PROVIDER_RAJAONGKIR = 'rajaongkir';
+    public const SHIPPING_PROVIDER_BITESHIP   = 'biteship';
+    public const SHIPPING_PROVIDER_MANUAL     = 'manual';
+
     /** Human-readable Indonesian label per status. */
     public const STATUS_LABELS = [
         self::STATUS_PENDING               => 'Menunggu Pembayaran',
@@ -61,6 +65,13 @@ class Order extends Model
         'payment_verified_by',
         'payment_verified_at',
         'payment_rejection_reason',
+        // Shipping provider (paralel rajaongkir/biteship)
+        'shipping_provider',
+        'biteship_order_id',
+        'biteship_courier_code',
+        'biteship_courier_service_code',
+        'biteship_status',
+        'biteship_raw',
     ];
 
     /** Always include the synthesized timeline when serialised to JSON. */
@@ -77,6 +88,7 @@ class Order extends Model
             'paid_at'                   => 'datetime',
             'payment_proof_uploaded_at' => 'datetime',
             'payment_verified_at'       => 'datetime',
+            'biteship_raw'              => 'array',
         ];
     }
 

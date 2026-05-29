@@ -13,7 +13,23 @@ import type { Address, PaymentMethod } from '@/lib/types';
 
 type Province = { province_id: string; province: string };
 type City = { city_id: string; province_id: string; type: string; city_name: string; postal_code: string };
-type Cost = { courier: string; service: string; description: string; cost: number; etd: string };
+/**
+ * Bentuk unified untuk tarif pengiriman, dipakai bareng-bareng oleh
+ * RajaOngkir & Biteship. Field `provider` dipakai saat submit untuk tahu
+ * harus diisi `biteship_courier_code` atau cukup `courier` saja.
+ */
+type Cost = {
+  courier: string;
+  service: string;
+  description: string;
+  cost: number;
+  etd: string;
+  provider?: 'rajaongkir' | 'biteship';
+  /** Untuk Biteship: kode kurir & layanan internal mereka. */
+  biteship_courier_code?: string | null;
+  biteship_courier_service_code?: string | null;
+  available_for_cod?: boolean;
+};
 
 /**
  * Cache helper berbasis localStorage untuk data yang sangat statis seperti
@@ -103,6 +119,15 @@ function CheckoutPageInner() {
   const [cityId, setCityId] = useState('');
   const [postalCode, setPostalCode] = useState('');
   const [courier, setCourier] = useState<CourierCode>('jne');
+  /**
+   * Provider ongkir aktif. Muncul sebagai toggle sebelum daftar kurir kalau
+   * admin sudah aktifkan Biteship; kalau tidak, defaultnya rajaongkir tanpa UI.
+   */
+  const [provider, setProvider] = useState<'rajaongkir' | 'biteship'>(
+    siteSettings.biteship_enabled
+      ? (siteSettings.default_shipping_provider === 'biteship' ? 'biteship' : 'rajaongkir')
+      : 'rajaongkir',
+  );
   const [costs, setCosts] = useState<Cost[]>([]);
   const [chosenCost, setChosenCost] = useState<Cost | null>(null);
   const [voucherCode, setVoucherCode] = useState('');
@@ -376,6 +401,83 @@ function CheckoutPageInner() {
   const [costsLoading, setCostsLoading] = useState(false);
   const costAbortRef = useRef<AbortController | null>(null);
   useEffect(() => {
+    if (provider === 'biteship') {
+      // Biteship perlu kode pos tujuan + items, bukan cityId.
+      // Kalau kode pos belum diisi user (dan tidak terambil dari kota
+      // RajaOngkir), kita biarkan kosong & kasih hint.
+      const dest = (postalCode || cities.find((c) => c.city_id === cityId)?.postal_code || '').trim();
+      if (!dest) {
+        setCosts([]);
+        setChosenCost(null);
+        setCostsLoading(false);
+        return;
+      }
+      const weight = Math.max(1, viewWeight);
+      // Items: kalau buy_now, single item; kalau cart, mapping isi cart.
+      const items = buyNow
+        ? [{
+            name: buyNow._preview.name,
+            value: buyNow._preview.unit_price,
+            weight: Math.max(1, buyNow._preview.weight),
+            quantity: buyNow.quantity,
+          }]
+        : (cart?.items ?? []).map((it) => ({
+            name: it.name,
+            value: it.selling_price,
+            weight: Math.max(1, it.weight),
+            quantity: it.quantity,
+          }));
+      if (items.length === 0) return;
+
+      const cacheKey = `ranco.bcost.${dest}.${weight}.${items.length}`;
+      const cached = cacheGet<Cost[]>(cacheKey, 30 * 60 * 1000);
+      if (cached && cached.length > 0) {
+        setCosts(cached);
+        setChosenCost((prev) => prev ?? cached[0] ?? null);
+      } else {
+        setCostsLoading(true);
+      }
+
+      const timer = setTimeout(async () => {
+        costAbortRef.current?.abort();
+        const controller = new AbortController();
+        costAbortRef.current = controller;
+        setCostsLoading(true);
+        try {
+          const r = await api.post(
+            '/shipping/biteship/rates',
+            { destination_postal_code: Number(dest), items },
+            { signal: controller.signal },
+          );
+          // Backend sudah meng-adapt ke shape `Cost`. Pastikan provider terisi.
+          const list = ((r.data.data ?? []) as Cost[]).map((c) => ({
+            ...c,
+            provider: 'biteship' as const,
+            // backend kirim courier+service di kode Biteship; kita simpan juga
+            // di field biteship_* supaya jelas saat submit.
+            biteship_courier_code: c.courier,
+            biteship_courier_service_code: c.service,
+          }));
+          setCosts(list);
+          setChosenCost((prev) => prev ?? list[0] ?? null);
+          if (list.length > 0) cacheSet(cacheKey, list);
+          else if (r.data?.reason) {
+            toast.error('Biteship: '+r.data.reason);
+          }
+        } catch (e: unknown) {
+          const err = e as { code?: string; name?: string };
+          if (err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError' || err?.name === 'AbortError') return;
+          if (!cached) toast.error(apiError(e));
+        } finally {
+          if (costAbortRef.current === controller) setCostsLoading(false);
+        }
+      }, 250);
+      return () => {
+        clearTimeout(timer);
+        costAbortRef.current?.abort();
+      };
+    }
+
     if (!cityId) {
       setCosts([]);
       setChosenCost(null);
@@ -441,7 +543,7 @@ function CheckoutPageInner() {
       clearTimeout(timer);
       costAbortRef.current?.abort();
     };
-  }, [cityId, courier, viewWeight]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cityId, courier, viewWeight, provider, postalCode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function applyVoucher() {
     if (!voucherCode) { setDiscount(0); return; }
@@ -539,7 +641,14 @@ function CheckoutPageInner() {
         shipping_cost: chosenCost.cost,
         voucher_code: voucherCode || undefined,
         payment_method: paymentMethod,
+        shipping_provider: chosenCost.provider ?? provider,
       };
+      // Kalau pakai Biteship, kirim juga kode internal mereka supaya backend
+      // bisa langsung pakai untuk createOrder() tanpa lookup tambahan.
+      if ((chosenCost.provider ?? provider) === 'biteship') {
+        payload.biteship_courier_code = chosenCost.biteship_courier_code ?? chosenCost.courier;
+        payload.biteship_courier_service_code = chosenCost.biteship_courier_service_code ?? chosenCost.service;
+      }
       // Mode Beli Sekarang: kirim payload buy_now supaya backend membuat
       // order hanya dari produk ini, tanpa menyentuh keranjang user.
       if (buyNow) {
@@ -833,38 +942,99 @@ function CheckoutPageInner() {
         </div>
 
         <div className="card p-4">
-          <h2 className="font-semibold mb-3">Pengiriman</h2>
-          <div className="flex gap-2 mb-3 flex-wrap items-center">
-            {COURIER_CODES.map((c) => (
-              <button
-                key={c}
-                onClick={() => setCourier(c)}
-                className={`btn ${courier === c ? 'bg-ink text-white' : 'bg-gray-100'}`}
-                title={COURIERS[c].label}
-              >
-                {COURIERS[c].label}
-              </button>
-            ))}
-            {costsLoading && (
-              <span className="ml-auto text-xs text-gray-500">Menghitung ongkir...</span>
+          <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+            <h2 className="font-semibold">Pengiriman</h2>
+            {/* Toggle provider — hanya tampil kalau admin sudah aktifkan Biteship.
+                RajaOngkir = pilih kurir manual + cek tarif, kurir terbatas (jne/jnt/pos/tiki).
+                Biteship   = aggregator multi-kurir, tarif sekaligus untuk semua + dukung COD
+                             flag per kurir + auto-AWB saat admin proses. */}
+            {siteSettings.biteship_enabled && (
+              <div className="inline-flex rounded-lg border border-gray-200 p-0.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => { setProvider('rajaongkir'); setChosenCost(null); }}
+                  className={`px-3 py-1.5 rounded-md transition ${provider === 'rajaongkir' ? 'bg-brand text-white' : 'text-gray-700'}`}
+                >
+                  RajaOngkir
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setProvider('biteship'); setChosenCost(null); }}
+                  className={`px-3 py-1.5 rounded-md transition ${provider === 'biteship' ? 'bg-brand text-white' : 'text-gray-700'}`}
+                  title="Aggregator multi-kurir + auto resi & tracking"
+                >
+                  Biteship
+                </button>
+              </div>
             )}
           </div>
-          {!cityId && cekOngkirHint && (
+
+          {/* Untuk RajaOngkir: pilih kurir dulu (cek tarif terbatas per kurir).
+              Untuk Biteship: tidak perlu pilih kurir dulu — semua kurir dikirim
+              sekaligus oleh API, customer pilih dari list. */}
+          {provider === 'rajaongkir' && (
+            <div className="flex gap-2 mb-3 flex-wrap items-center">
+              {COURIER_CODES.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setCourier(c)}
+                  className={`btn ${courier === c ? 'bg-ink text-white' : 'bg-gray-100'}`}
+                  title={COURIERS[c].label}
+                >
+                  {COURIERS[c].label}
+                </button>
+              ))}
+              {costsLoading && (
+                <span className="ml-auto text-xs text-gray-500">Menghitung ongkir...</span>
+              )}
+            </div>
+          )}
+          {provider === 'biteship' && (
+            <div className="text-xs text-gray-500 mb-2 flex items-center justify-between">
+              <span>Tarif diambil real-time dari multi-kurir Biteship.</span>
+              {costsLoading && <span>Memuat tarif...</span>}
+            </div>
+          )}
+          {provider === 'biteship' && !postalCode && (
+            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mb-2">
+              Isi <b>kode pos</b> di alamat untuk menghitung tarif Biteship.
+            </div>
+          )}
+          {provider === 'rajaongkir' && !cityId && cekOngkirHint && (
             <div className="text-xs text-gray-500 mb-2">{cekOngkirHint}.</div>
           )}
-          {cityId && !costsLoading && costs.length === 0 && (
-            <div className="text-xs text-gray-500 mb-2">Tidak ada layanan tersedia untuk kurir ini. Coba kurir lain.</div>
+          {((provider === 'rajaongkir' && cityId) || (provider === 'biteship' && postalCode)) && !costsLoading && costs.length === 0 && (
+            <div className="text-xs text-gray-500 mb-2">
+              Tidak ada layanan tersedia. {provider === 'rajaongkir' ? 'Coba kurir lain.' : 'Coba kode pos lain atau switch ke RajaOngkir.'}
+            </div>
           )}
           <div className="space-y-2">
             {costs.map((c, i) => (
-              <label key={i} className={`card p-3 flex justify-between cursor-pointer ${chosenCost?.service === c.service ? 'border-brand' : ''}`}>
-                <div>
-                  <div className="font-medium">{c.courier.toUpperCase()} — {c.service}</div>
-                  <div className="text-xs text-gray-500">{c.description} · Estimasi {c.etd} hari</div>
+              <label key={i} className={`card p-3 flex justify-between cursor-pointer ${chosenCost?.service === c.service && chosenCost?.courier === c.courier ? 'border-brand' : ''}`}>
+                <div className="min-w-0">
+                  <div className="font-medium flex items-center gap-2">
+                    <span>{c.courier.toUpperCase()} — {c.service.toUpperCase()}</span>
+                    {c.provider === 'biteship' && (
+                      <span className="text-[9px] uppercase tracking-wide bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded">
+                        Biteship
+                      </span>
+                    )}
+                    {c.available_for_cod && paymentMethod === 'cod' && (
+                      <span className="text-[9px] uppercase tracking-wide bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">
+                        COD ✓
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-500">{c.description}{c.etd ? ` · Estimasi ${c.etd} hari` : ''}</div>
                 </div>
-                <div className="text-right">
+                <div className="text-right shrink-0 ml-2">
                   <div className="font-semibold">{formatRupiah(c.cost)}</div>
-                  <input type="radio" name="srv" checked={chosenCost?.service === c.service} onChange={() => setChosenCost(c)} />
+                  <input
+                    type="radio"
+                    name="srv"
+                    checked={chosenCost?.service === c.service && chosenCost?.courier === c.courier}
+                    onChange={() => setChosenCost(c)}
+                  />
                 </div>
               </label>
             ))}
