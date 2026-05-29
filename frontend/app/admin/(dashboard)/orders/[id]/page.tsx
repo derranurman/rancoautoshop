@@ -136,11 +136,23 @@ export default function AdminOrderDetailPage() {
           target="_blank"
           rel="noreferrer"
           className="btn-outline text-sm"
-          title="Buka halaman label pengiriman, lalu Cetak (Ctrl/Cmd + P) atau Save as PDF"
+          title={order.tracking_number
+            ? 'Buka halaman label pengiriman, lalu Cetak (Ctrl/Cmd + P) atau Save as PDF'
+            : 'Resi belum diisi — label akan dicetak tanpa nomor resi & tanpa barcode'}
         >
-          Cetak Label
+          Cetak Label{!order.tracking_number && ' ⚠'}
         </a>
       </div>
+
+      {/* Reminder kalau status sudah shipped tapi resi masih kosong — kasus
+          paling sering admin lupa input AWB sebelum cetak label. */}
+      {!order.tracking_number && order.status !== 'pending' && order.status !== 'cancelled' && (
+        <div className="card p-3 bg-yellow-50 border-yellow-300 text-sm text-yellow-900">
+          ⚠ Pesanan ini belum punya nomor resi kurir. Pesan jemputan ke {courierLabel(order.courier)},
+          dapatkan nomor resi (mis. <span className="font-mono">JX9481926078</span> untuk J&amp;T atau{' '}
+          <span className="font-mono">CGKDA00012345678</span> untuk JNE), lalu input di field <b>Nomor Resi</b> di bawah.
+        </div>
+      )}
 
       <div className="card p-4 text-sm space-y-1">
         <div className="flex justify-between">
@@ -302,8 +314,21 @@ export default function AdminOrderDetailPage() {
         <h2 className="font-semibold">Update Status</h2>
         <div>
           <label className="label">Nomor Resi ({courierLabel(order.courier)} {order.courier_service})</label>
-          <input className="input" placeholder="Masukkan no resi kurir" value={tracking}
-                 onChange={(e) => setTracking(e.target.value)} />
+          <input
+            className="input font-mono"
+            placeholder={
+              order.courier === 'jnt' ? 'cth: JX9481926078'
+              : order.courier === 'jne' ? 'cth: CGKDA00012345678'
+              : order.courier === 'pos' ? 'cth: 16001234567890'
+              : 'Masukkan no resi dari kurir'
+            }
+            value={tracking}
+            onChange={(e) => setTracking(e.target.value.trim())}
+          />
+          <div className="text-xs text-gray-500 mt-1">
+            Resi ini akan tampil di halaman pesanan customer (untuk track paket) &amp; di label pengiriman.
+            Pastikan persis seperti yang diberikan kurir — typo bikin tracking gagal.
+          </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>

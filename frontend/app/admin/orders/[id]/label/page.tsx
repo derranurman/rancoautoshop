@@ -5,6 +5,18 @@ import { useParams } from 'next/navigation';
 import { api, formatRupiah } from '@/lib/api';
 import { useAdminAuth } from '@/lib/stores';
 import type { Order, SiteSettingsAdmin } from '@/lib/types';
+import { AwbBarcode } from '@/components/AwbBarcode';
+
+/** Mapping warna brand kurir untuk box AWB di label. Pakai warna yang dekat
+ *  dengan brand asli supaya kurir mudah recognize saat scanning. */
+const COURIER_BRAND: Record<string, { bg: string; text: string; label: string }> = {
+  jne: { bg: '#d40000', text: '#ffffff', label: 'JNE' },
+  jnt: { bg: '#ed1c24', text: '#ffffff', label: 'J&T EXPRESS' },
+  pos: { bg: '#f57c00', text: '#ffffff', label: 'POS INDONESIA' },
+  tiki:{ bg: '#1d4ed8', text: '#ffffff', label: 'TIKI' },
+  sicepat: { bg: '#e11d48', text: '#ffffff', label: 'SICEPAT' },
+  anteraja:{ bg: '#0ea5e9', text: '#ffffff', label: 'ANTERAJA' },
+};
 
 /**
  * Label pengiriman printable.
@@ -61,6 +73,9 @@ export default function ShippingLabelPage() {
     (sum, it) => sum + (it.quantity * 1000), // approx — order tidak simpan berat per item
     0,
   );
+  const courierKey = (order.courier ?? '').toLowerCase();
+  const brand = COURIER_BRAND[courierKey] ?? { bg: '#111827', text: '#ffffff', label: courierKey.toUpperCase() || 'KURIR' };
+  const hasResi = !!(order.tracking_number && order.tracking_number.trim().length > 0);
   // Berat per item tidak di-snapshot (hanya order.shipping_cost). Kita pakai
   // kalkulasi konservatif: jumlah qty × 1000g, ATAU kalau ada di product berat
   // sebenarnya, tapi karena kita hanya punya snapshot order_items, pakai default.
@@ -172,22 +187,57 @@ export default function ShippingLabelPage() {
             </div>
           </div>
 
-          {/* Kurir & resi */}
-          <div className="border-t-2 border-black px-4 py-2 grid grid-cols-3 gap-2 text-xs">
+          {/* AWB / Resi — section paling prominent, persis seperti label kurir
+              asli. Box berwarna brand kurir + barcode Code-128 yang bisa
+              di-scan langsung saat sortir di hub kurir. Kalau resi belum
+              di-input, banner kuning "BELUM ADA RESI" muncul supaya admin
+              tidak tidak sengaja print label kosong. */}
+          <div className="border-t-2 border-black">
+            {hasResi ? (
+              <div className="px-4 py-3" style={{ background: brand.bg, color: brand.text }}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[10px] uppercase tracking-widest opacity-80">
+                    Air Waybill ({brand.label})
+                  </div>
+                  <div className="text-[10px] uppercase tracking-wide opacity-80">
+                    Layanan: <b>{order.courier_service}</b>
+                  </div>
+                </div>
+                <div className="font-mono font-extrabold tracking-wider text-2xl mt-1 leading-tight">
+                  {order.tracking_number}
+                </div>
+                {/* Barcode di atas background putih supaya scanner bisa baca
+                    kontras hitam-putih dengan benar. */}
+                <div className="mt-2 bg-white rounded p-2 flex items-center justify-center">
+                  <AwbBarcode value={order.tracking_number ?? ''} height={56} fontSize={12} />
+                </div>
+              </div>
+            ) : (
+              <div className="px-4 py-3 bg-yellow-100 border-y-2 border-yellow-500">
+                <div className="text-[10px] uppercase tracking-widest text-yellow-900 font-semibold">
+                  Air Waybill ({brand.label})
+                </div>
+                <div className="font-bold text-yellow-900 text-base mt-1">
+                  ⚠ Resi belum diisi
+                </div>
+                <div className="text-xs text-yellow-900">
+                  Pesan jemputan ke kurir, dapat nomor resi (cth: <span className="font-mono">JX9481926078</span>),
+                  lalu input di halaman pesanan admin sebelum cetak ulang.
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Kurir & berat (resi sudah ditampilkan di section AWB di atas) */}
+          <div className="border-t border-gray-300 px-4 py-2 grid grid-cols-2 gap-2 text-xs">
             <div>
               <div className="text-[10px] uppercase tracking-wide text-gray-500">Kurir</div>
-              <div className="font-bold">{(order.courier ?? '-').toUpperCase()}</div>
+              <div className="font-bold">{brand.label}</div>
               <div className="text-gray-700">{order.courier_service}</div>
             </div>
             <div>
               <div className="text-[10px] uppercase tracking-wide text-gray-500">Berat</div>
               <div className="font-bold">{(totalWeightGr / 1000).toFixed(1)} kg</div>
-            </div>
-            <div>
-              <div className="text-[10px] uppercase tracking-wide text-gray-500">Resi</div>
-              <div className="font-mono font-bold">
-                {order.tracking_number ?? <span className="text-gray-400 font-sans font-normal italic">belum diisi</span>}
-              </div>
             </div>
           </div>
 
