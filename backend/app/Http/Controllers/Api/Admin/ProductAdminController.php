@@ -176,6 +176,7 @@ class ProductAdminController extends Controller
             'price'            => ['required', 'integer', 'min:0'],
             'operational_cost' => ['nullable', 'integer', 'min:0'],
             'stock'            => ['required', 'integer', 'min:0'],
+            'low_stock_threshold' => ['nullable', 'integer', 'min:0'],
             'weight'           => ['required', 'integer', 'min:1'],
             'images'           => ['nullable', 'array'],
             'images.*'         => ['string'], // either /storage/... path or full URL
@@ -322,6 +323,187 @@ class ProductAdminController extends Controller
         if (str_starts_with($url, '/storage/')) {
             return substr($url, strlen('/storage/'));
         }
+        return null;
+    }
+
+    /**
+     * Bulk import produk dari payload JSON.
+     *
+     * Format input:
+     *   {
+     *     "rows": [
+     *       { "name": "Stir Skeleton", "price": 450000, "stock": 10, ... },
+     *       ...
+     *     ],
+     *     "match_by": "slug" | "name" (default "slug")  // identifier untuk update
+     *   }
+     *
+     * Kenapa JSON, bukan file Excel langsung di backend?
+     *  - Frontend sudah punya SheetJS (xlsx) yang lebih kuat dari PhpSpreadsheet
+     *    untuk parse XLSX/CSV.
+     *  - Tidak perlu menambah dependency PHP composer untuk Excel parsing.
+     *  - Memberi admin kesempatan PREVIEW + perbaiki data sebelum commit ke server.
+     *
+     * Field yang dikenali per row:
+     *   - name (req), slug (opsional, dihasilkan dari name kalau kosong)
+     *   - category (nama kategori, dicocokkan case-insensitive — kalau tidak ada,
+     *     kategori dibuat otomatis dengan persen ops 0)
+     *   - price (req), operational_cost (opsional), stock (default 0)
+     *   - weight (default 1000), description, is_active (default true)
+     *   - low_stock_threshold (opsional)
+     *
+     * Mode upsert: kalau slug yang sama sudah ada → update; kalau tidak → create.
+     * Image SENGAJA tidak diimport via Excel — admin upload manual setelahnya
+     * supaya tidak mengundang URL-eksternal yang tidak ter-vetting.
+     *
+     * Return summary: created, updated, errors[] (with row number).
+     */
+    public function bulkImport(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'rows'              => ['required', 'array', 'min:1', 'max:1000'],
+            'rows.*.name'       => ['nullable', 'string'],
+            'rows.*.slug'       => ['nullable', 'string'],
+            'rows.*.category'   => ['nullable', 'string'],
+            'rows.*.price'      => ['nullable'],
+            'rows.*.operational_cost' => ['nullable'],
+            'rows.*.stock'      => ['nullable'],
+            'rows.*.weight'     => ['nullable'],
+            'rows.*.description'=> ['nullable', 'string'],
+            'rows.*.is_active'  => ['nullable'],
+            'rows.*.low_stock_threshold' => ['nullable'],
+            'match_by'          => ['nullable', 'string', 'in:slug,name'],
+        ]);
+
+        $matchBy = $data['match_by'] ?? 'slug';
+        $created = 0; $updated = 0;
+        $errors  = [];
+
+        DB::transaction(function () use ($data, $matchBy, &$created, &$updated, &$errors) {
+            foreach ($data['rows'] as $i => $raw) {
+                try {
+                    $name = trim((string) ($raw['name'] ?? ''));
+                    if ($name === '') {
+                        $errors[] = ['row' => $i + 1, 'error' => 'Kolom "name" wajib diisi.'];
+                        continue;
+                    }
+                    $price = $this->intOrNull($raw['price'] ?? null);
+                    if ($price === null) {
+                        $errors[] = ['row' => $i + 1, 'error' => 'Kolom "price" tidak valid.'];
+                        continue;
+                    }
+                    $payload = [
+                        'name'             => $name,
+                        'price'            => $price,
+                        'operational_cost' => $this->intOrNull($raw['operational_cost'] ?? null) ?? 0,
+                        'stock'            => $this->intOrNull($raw['stock'] ?? null) ?? 0,
+                        'weight'           => $this->intOrNull($raw['weight'] ?? null) ?: 1000,
+                        'description'      => isset($raw['description']) ? (string) $raw['description'] : null,
+                        'is_active'        => $this->boolOrNull($raw['is_active'] ?? null) ?? true,
+                        'low_stock_threshold' => $this->intOrNull($raw['low_stock_threshold'] ?? null),
+                    ];
+
+                    // Resolve kategori berdasarkan nama (case-insensitive).
+                    $catName = trim((string) ($raw['category'] ?? ''));
+                    if ($catName !== '') {
+                        $cat = \App\Models\Category::whereRaw('LOWER(name) = ?', [strtolower($catName)])->first();
+                        if (! $cat) {
+                            $cat = \App\Models\Category::create([
+                                'name' => $catName,
+                                'slug' => Str::slug($catName),
+                            ]);
+                        }
+                        $payload['category_id'] = $cat->id;
+                    }
+
+                    // Lookup existing.
+                    $existing = null;
+                    if ($matchBy === 'slug') {
+                        $slug = trim((string) ($raw['slug'] ?? ''));
+                        if ($slug === '') $slug = Str::slug($name);
+                        $existing = Product::where('slug', $slug)->first();
+                        $payload['slug'] = $slug;
+                    } else {
+                        $existing = Product::where('name', $name)->first();
+                    }
+
+                    if ($existing) {
+                        // Pertahankan slug existing supaya URL produk tidak berubah,
+                        // kecuali admin secara eksplisit kirim slug baru.
+                        unset($payload['slug']);
+                        $existing->update($payload);
+                        $updated++;
+                    } else {
+                        if (! isset($payload['slug'])) {
+                            $payload['slug'] = $this->uniqueSlug($name);
+                        } else {
+                            $payload['slug'] = $this->uniqueSlug($payload['slug']);
+                        }
+                        Product::create($payload);
+                        $created++;
+                    }
+                } catch (\Throwable $e) {
+                    $errors[] = ['row' => $i + 1, 'error' => $e->getMessage()];
+                }
+            }
+        });
+
+        return response()->json([
+            'created' => $created,
+            'updated' => $updated,
+            'errors'  => $errors,
+        ]);
+    }
+
+    /**
+     * Export semua produk sebagai array baris flat — frontend yang akan
+     * bungkus jadi XLSX pakai SheetJS (sudah dipakai untuk export pesanan).
+     */
+    public function bulkExport(Request $request): JsonResponse
+    {
+        $q = Product::query()->with('category:id,name,slug');
+        if ($s = $request->string('search')->trim()->value()) {
+            $q->where('name', 'like', "%{$s}%");
+        }
+        if ($categoryId = $request->integer('category_id')) {
+            $q->where('category_id', $categoryId);
+        }
+
+        $rows = $q->limit(10000)->get()->map(fn (Product $p) => [
+            'id'                  => $p->id,
+            'name'                => $p->name,
+            'slug'                => $p->slug,
+            'category'            => $p->category?->name,
+            'price'               => (int) $p->price,
+            'operational_cost'    => (int) $p->operational_cost,
+            'selling_price'       => $p->selling_price,
+            'stock'               => (int) $p->stock,
+            'low_stock_threshold' => $p->low_stock_threshold,
+            'weight'              => (int) $p->weight,
+            'description'         => $p->description,
+            'is_active'           => (bool) $p->is_active ? '1' : '0',
+        ]);
+
+        return response()->json(['data' => $rows]);
+    }
+
+    /** Coerce string/int/null/bool ke integer, atau null kalau tidak parseable. */
+    protected function intOrNull(mixed $v): ?int
+    {
+        if ($v === null || $v === '') return null;
+        if (is_int($v)) return $v;
+        if (is_numeric($v)) return (int) $v;
+        return null;
+    }
+
+    /** Coerce "1/0/true/false/yes/no" → bool, null kalau tidak diset. */
+    protected function boolOrNull(mixed $v): ?bool
+    {
+        if ($v === null || $v === '') return null;
+        if (is_bool($v)) return $v;
+        $s = strtolower(trim((string) $v));
+        if (in_array($s, ['1', 'true', 'yes', 'aktif', 'y'], true)) return true;
+        if (in_array($s, ['0', 'false', 'no',  'tidak', 'nonaktif', 'n'], true)) return false;
         return null;
     }
 }

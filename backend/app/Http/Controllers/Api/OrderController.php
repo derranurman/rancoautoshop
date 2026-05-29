@@ -69,7 +69,7 @@ class OrderController extends Controller
             'courier_service'       => ['required', 'string'],
             'shipping_cost'         => ['required', 'integer', 'min:0'],
             'voucher_code'          => ['nullable', 'string', 'max:40'],
-            'payment_method'        => ['nullable', 'string', 'in:midtrans,manual_transfer'],
+            'payment_method'        => ['nullable', 'string', 'in:midtrans,manual_transfer,cod'],
             'buy_now'               => ['nullable', 'array'],
             'buy_now.product_id'    => ['required_with:buy_now', 'integer'],
             'buy_now.variant_id'    => ['nullable', 'integer'],
@@ -88,6 +88,18 @@ class OrderController extends Controller
                     && $settings->bank_account_number,
                 422,
                 'Pembayaran transfer manual belum diaktifkan oleh admin.'
+            );
+        }
+
+        // COD: validasi sama — admin harus enable + total order harus dalam
+        // rentang min/max yang diatur. Validasi nominal akan re-cek setelah
+        // total dihitung di transaction (di dalamnya).
+        if ($paymentMethod === Order::PAYMENT_METHOD_COD) {
+            $settings = SiteSetting::current();
+            abort_unless(
+                $settings->cod_enabled,
+                422,
+                'Bayar di Tempat (COD) belum diaktifkan oleh admin.'
             );
         }
 
@@ -187,6 +199,21 @@ class OrderController extends Controller
             $shipping = (int) $data['shipping_cost'];
             $total    = max(0, $subtotal + $opCost - $discount + $shipping);
 
+            // Untuk COD, terapkan biaya tambahan & cek rentang nominal di sini —
+            // tidak bisa cek di awal karena total tergantung subtotal + ongkir.
+            $codFee = 0;
+            if ($paymentMethod === Order::PAYMENT_METHOD_COD) {
+                $settings = SiteSetting::current();
+                $codFee = (int) $settings->cod_extra_fee;
+                $total += $codFee;
+                if ($settings->cod_min_total > 0 && $total < (int) $settings->cod_min_total) {
+                    abort(422, 'Total pesanan dibawah minimum COD: '.number_format((int) $settings->cod_min_total, 0, ',', '.'));
+                }
+                if ($settings->cod_max_total !== null && $settings->cod_max_total > 0 && $total > (int) $settings->cod_max_total) {
+                    abort(422, 'Total pesanan melebihi maksimum COD: '.number_format((int) $settings->cod_max_total, 0, ',', '.'));
+                }
+            }
+
             $order = Order::create([
                 'order_number'      => 'RANCO-'.strtoupper(Str::random(10)),
                 'user_id'           => $user->id,
@@ -246,6 +273,14 @@ class OrderController extends Controller
                     'Pesanan dibuat. Menunggu pembayaran melalui Midtrans.',
                     OrderTrackingEvent::SOURCE_SYSTEM,
                 );
+            } elseif ($paymentMethod === Order::PAYMENT_METHOD_COD) {
+                $order->addTrackingEvent(
+                    Order::STATUS_PENDING,
+                    'Pesanan dibuat dengan metode Bayar di Tempat (COD). '
+                    . 'Menunggu admin memproses pengiriman.'
+                    . ($codFee > 0 ? ' Termasuk biaya COD Rp '.number_format($codFee, 0, ',', '.').'.' : ''),
+                    OrderTrackingEvent::SOURCE_SYSTEM,
+                );
             } else {
                 $order->addTrackingEvent(
                     Order::STATUS_PENDING,
@@ -262,6 +297,7 @@ class OrderController extends Controller
                 'bank_account' => $paymentMethod === Order::PAYMENT_METHOD_MANUAL_TRANSFER
                     ? $this->bankInfo()
                     : null,
+                'cod_fee'      => $codFee,
             ], 201);
         });
     }

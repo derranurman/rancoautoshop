@@ -10,6 +10,9 @@ import { PackageTracker } from '@/components/PackageTracker';
 import { courierLabel } from '@/lib/couriers';
 
 const NEXT_STATUS: Record<string, string[]> = {
+  // Untuk COD, izinkan pending → packed langsung (admin tidak perlu confirm
+  // payment dulu karena pembayaran terjadi saat barang sampai). Frontend pakai
+  // `payment_method === 'cod'` untuk men-overlay opsi tambahan ini.
   pending:               ['paid', 'cancelled'],
   awaiting_verification: ['paid', 'pending', 'cancelled'],
   paid:                  ['packed', 'cancelled'],
@@ -17,6 +20,12 @@ const NEXT_STATUS: Record<string, string[]> = {
   shipped:               ['delivered'],
   delivered:             [],
   cancelled:             [],
+};
+
+/** Untuk order COD, transisi pending → packed langsung diizinkan. */
+const COD_NEXT_STATUS: Record<string, string[]> = {
+  ...NEXT_STATUS,
+  pending: ['packed', 'cancelled'],
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -114,14 +123,43 @@ export default function AdminOrderDetailPage() {
 
   if (!order) return <div className="text-gray-500">Memuat...</div>;
 
-  const transitions = NEXT_STATUS[order.status] ?? [];
+  const transitions = (order.payment_method === 'cod'
+    ? COD_NEXT_STATUS[order.status]
+    : NEXT_STATUS[order.status]) ?? [];
 
   return (
     <div className="space-y-4 max-w-3xl">
-      <h1 className="text-2xl font-bold">Order {order.order_number}</h1>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <h1 className="text-2xl font-bold">Order {order.order_number}</h1>
+        <a
+          href={`/admin/orders/${id}/label`}
+          target="_blank"
+          rel="noreferrer"
+          className="btn-outline text-sm"
+          title="Buka halaman label pengiriman, lalu Cetak (Ctrl/Cmd + P) atau Save as PDF"
+        >
+          Cetak Label
+        </a>
+      </div>
 
       <div className="card p-4 text-sm space-y-1">
-        <div className="flex justify-between"><span>Status saat ini</span><b>{STATUS_LABEL[order.status] ?? order.status}</b></div>
+        <div className="flex justify-between">
+          <span>Status saat ini</span>
+          <b>{STATUS_LABEL[order.status] ?? order.status}</b>
+        </div>
+        <div className="flex justify-between">
+          <span>Metode Pembayaran</span>
+          <span className={[
+            'text-xs font-semibold uppercase tracking-wide rounded px-2 py-0.5',
+            order.payment_method === 'cod' ? 'bg-amber-100 text-amber-800' :
+            order.payment_method === 'manual_transfer' ? 'bg-blue-100 text-blue-800' :
+            'bg-gray-100 text-gray-700',
+          ].join(' ')}>
+            {order.payment_method === 'cod' ? 'COD'
+              : order.payment_method === 'manual_transfer' ? 'Transfer Manual'
+              : 'Midtrans'}
+          </span>
+        </div>
         <div className="flex justify-between"><span>Penerima</span><span>{order.recipient_name} — {order.recipient_phone}</span></div>
         <div className="whitespace-pre-line text-gray-600">{order.shipping_address}</div>
         {order.tracking_number && (

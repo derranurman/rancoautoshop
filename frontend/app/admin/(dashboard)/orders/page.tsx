@@ -199,6 +199,7 @@ export default function AdminOrdersPage() {
               <th className="px-3 py-2">Tanggal</th>
               <th className="px-3 py-2">Penerima</th>
               <th className="px-3 py-2">Kurir</th>
+              <th className="px-3 py-2">Bayar</th>
               <th className="px-3 py-2">Status</th>
               <th className="px-3 py-2 text-right">Total</th>
               <th className="px-3 py-2 text-right">Aksi</th>
@@ -206,7 +207,7 @@ export default function AdminOrdersPage() {
           </thead>
           <tbody>
             {loading && (
-              <tr><td colSpan={7} className="px-3 py-10 text-center text-gray-500">Memuat data...</td></tr>
+              <tr><td colSpan={8} className="px-3 py-10 text-center text-gray-500">Memuat data...</td></tr>
             )}
             {!loading && orders.map((o) => (
               <tr key={o.id} className="border-t border-gray-100">
@@ -214,6 +215,18 @@ export default function AdminOrdersPage() {
                 <td className="px-3 py-2 whitespace-nowrap text-gray-600">{formatDateTime(o.created_at)}</td>
                 <td className="px-3 py-2">{o.recipient_name}</td>
                 <td className="px-3 py-2">{o.courier?.toUpperCase()} {o.courier_service}</td>
+                <td className="px-3 py-2">
+                  <span className={[
+                    'text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5',
+                    o.payment_method === 'cod' ? 'bg-amber-100 text-amber-800' :
+                    o.payment_method === 'manual_transfer' ? 'bg-blue-100 text-blue-800' :
+                    'bg-gray-100 text-gray-700',
+                  ].join(' ')}>
+                    {o.payment_method === 'cod' ? 'COD'
+                      : o.payment_method === 'manual_transfer' ? 'Transfer'
+                      : 'Online'}
+                  </span>
+                </td>
                 <td className="px-3 py-2"><span className="chip bg-gray-100">{o.status}</span></td>
                 <td className="px-3 py-2 text-right">{formatRupiah(o.total)}</td>
                 <td className="px-3 py-2 text-right">
@@ -222,7 +235,7 @@ export default function AdminOrdersPage() {
               </tr>
             ))}
             {!loading && orders.length === 0 && (
-              <tr><td colSpan={7} className="px-3 py-10 text-center text-gray-500">Tidak ada pesanan.</td></tr>
+              <tr><td colSpan={8} className="px-3 py-10 text-center text-gray-500">Tidak ada pesanan.</td></tr>
             )}
           </tbody>
         </table>

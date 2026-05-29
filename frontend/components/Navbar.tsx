@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { useAuth, useCart, useSiteSettings } from '@/lib/stores';
+import { SearchAutocomplete } from './SearchAutocomplete';
 
 export default function Navbar() {
   const { user, loading, loadMe, logout } = useAuth();
@@ -63,6 +64,14 @@ export default function Navbar() {
           <Link href="/" className="hover:text-brand">Katalog</Link>
           <Link href="/orders" className="hover:text-brand">Pesanan</Link>
         </nav>
+
+        {/* Search autocomplete — hanya muncul di desktop. Di mobile, search
+            tetap diakses lewat input besar di hero homepage. */}
+        <div className="hidden md:block flex-1 max-w-md mx-4">
+          <SearchAutocomplete
+            placeholder={settings.hero_search_placeholder}
+          />
+        </div>
 
         <div className="ml-auto flex items-center gap-2">
           <Link href="/cart" className="btn-outline relative">

@@ -29,6 +29,7 @@ interface FormState {
   price: number;
   operational_cost: number;
   stock: number;
+  low_stock_threshold: string;
   weight: number;
   images: string[];
   is_active: boolean;
@@ -37,7 +38,8 @@ interface FormState {
 
 const DEFAULT: FormState = {
   category_id: '', name: '', description: '',
-  price: 0, operational_cost: 0, stock: 0, weight: 1000, images: [], is_active: true,
+  price: 0, operational_cost: 0, stock: 0, low_stock_threshold: '',
+  weight: 1000, images: [], is_active: true,
   variants: [],
 };
 
@@ -76,7 +78,9 @@ export default function ProductForm({ productId }: { productId?: number }) {
           category_id: p.category_id ?? '',
           name: p.name ?? '', description: p.description ?? '',
           price: p.price, operational_cost: p.operational_cost,
-          stock: p.stock, weight: p.weight,
+          stock: p.stock,
+          low_stock_threshold: p.low_stock_threshold == null ? '' : String(p.low_stock_threshold),
+          weight: p.weight,
           images: p.images ?? [], is_active: !!p.is_active,
           variants: Array.isArray(p.variants)
             ? p.variants.map((v: {
@@ -324,6 +328,7 @@ export default function ProductForm({ productId }: { productId?: number }) {
         // stock akan ditimpa oleh server kalau ada varian (jadi total agregat),
         // tetap dikirim sebagai fallback untuk produk tanpa varian.
         stock: hasVariants ? variantsTotalStock : form.stock,
+        low_stock_threshold: form.low_stock_threshold === '' ? null : Number(form.low_stock_threshold),
         weight: form.weight,
         images: form.images,
         is_active: form.is_active,
@@ -461,6 +466,21 @@ export default function ProductForm({ productId }: { productId?: number }) {
             <div><label className="label">Berat (gram)</label>
               <input type="number" className="input" value={form.weight}
                      onChange={(e) => setForm({ ...form, weight: +e.target.value })} />
+            </div>
+            <div className="col-span-2">
+              <label className="label">Threshold &ldquo;stok hampir habis&rdquo; (opsional)</label>
+              <input
+                type="number"
+                min={0}
+                className="input"
+                placeholder="kosongkan = pakai default toko"
+                value={form.low_stock_threshold}
+                onChange={(e) => setForm({ ...form, low_stock_threshold: e.target.value })}
+              />
+              <div className="text-xs text-gray-500 mt-1">
+                Saat stok ≤ angka ini, label &ldquo;Stok hampir habis&rdquo; muncul untuk pelanggan.
+                Kosongkan untuk pakai threshold global yang diatur di Pengaturan Tampilan.
+              </div>
             </div>
           </div>
           <div className="card bg-gray-50 p-3 text-sm">

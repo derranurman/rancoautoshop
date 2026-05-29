@@ -85,6 +85,7 @@ function CheckoutPageInner() {
   const siteSettings = useSiteSettings((s) => s.settings);
   const manualTransferAvailable = !!siteSettings.manual_transfer_enabled
     && !!siteSettings.bank_account_number;
+  const codAvailable = !!siteSettings.cod_enabled;
 
   // Mode Beli Sekarang: dipicu saat URL mengandung ?buy_now=1 dan ada item
   // di sessionStorage. Dalam mode ini, halaman ini TIDAK memakai keranjang
@@ -455,13 +456,33 @@ function CheckoutPageInner() {
   const total = useMemo(() => {
     const s = viewSubtotal;
     const sh = chosenCost?.cost ?? 0;
-    return Math.max(0, s - discount + sh);
-  }, [viewSubtotal, chosenCost?.cost, discount]);
+    // Untuk COD, tambahkan biaya tambahan supaya total yang ditampilkan
+    // konsisten dengan apa yang akan ditagih server.
+    const codFee = paymentMethod === 'cod' ? (siteSettings.cod_extra_fee ?? 0) : 0;
+    return Math.max(0, s - discount + sh + codFee);
+  }, [viewSubtotal, chosenCost?.cost, discount, paymentMethod, siteSettings.cod_extra_fee]);
+
+  // Cek validasi nominal COD pre-submit. Pesan ditampilkan inline di summary,
+  // bukan toast supaya user bisa lihat sambil ganti barang/qty.
+  const codViolation = useMemo(() => {
+    if (paymentMethod !== 'cod') return null;
+    if (siteSettings.cod_min_total > 0 && total < siteSettings.cod_min_total) {
+      return `Total dibawah minimum COD: Rp ${siteSettings.cod_min_total.toLocaleString('id-ID')}.`;
+    }
+    if (siteSettings.cod_max_total && total > siteSettings.cod_max_total) {
+      return `Total melebihi maksimum COD: Rp ${siteSettings.cod_max_total.toLocaleString('id-ID')}.`;
+    }
+    return null;
+  }, [paymentMethod, total, siteSettings.cod_min_total, siteSettings.cod_max_total]);
 
   async function onSubmit() {
     if (!chosenCost) { toast.error('Pilih layanan pengiriman dulu'); return; }
     if (!recipient.phone.trim()) {
       toast.error('No HP penerima wajib diisi');
+      return;
+    }
+    if (codViolation) {
+      toast.error(codViolation);
       return;
     }
     const cityObj = cities.find((c) => c.city_id === cityId);
@@ -543,6 +564,12 @@ function CheckoutPageInner() {
       // Untuk transfer manual, langsung loncat ke halaman order detail —
       // di sana customer akan melihat info rekening + tombol upload bukti.
       if (paymentMethod === 'manual_transfer') {
+        router.push(`/orders/${orderNumber}`);
+        return;
+      }
+      // COD: tidak perlu Snap, tidak perlu upload bukti — admin yang akan
+      // memproses pengiriman, customer bayar saat barang sampai.
+      if (paymentMethod === 'cod') {
         router.push(`/orders/${orderNumber}`);
         return;
       }
@@ -912,19 +939,78 @@ function CheckoutPageInner() {
               )}
             </div>
           </label>
+
+          {/* COD: bayar saat barang diterima. Tampilkan biaya tambahan & rentang
+              kalau admin mengaturnya, supaya pembeli tidak kaget di summary. */}
+          <label className={[
+            'flex items-start gap-2 rounded-lg border p-2',
+            !codAvailable ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+            paymentMethod === 'cod' ? 'border-brand bg-brand/5' : 'border-gray-200',
+          ].join(' ')}>
+            <input
+              type="radio"
+              name="payment_method"
+              value="cod"
+              disabled={!codAvailable}
+              checked={paymentMethod === 'cod'}
+              onChange={() => setPaymentMethod('cod')}
+              className="mt-1"
+            />
+            <div className="text-sm">
+              <div className="font-medium">Bayar di Tempat (COD)</div>
+              {codAvailable ? (
+                <div className="text-xs text-gray-500">
+                  Bayar tunai langsung ke kurir saat barang sampai.
+                  {siteSettings.cod_extra_fee > 0 && (
+                    <> Biaya layanan COD: <b>{formatRupiah(siteSettings.cod_extra_fee)}</b>.</>
+                  )}
+                  {(siteSettings.cod_min_total > 0 || siteSettings.cod_max_total) && (
+                    <div className="text-[11px] text-gray-400">
+                      {siteSettings.cod_min_total > 0 && <>Min Rp {siteSettings.cod_min_total.toLocaleString('id-ID')}. </>}
+                      {siteSettings.cod_max_total && <>Maks Rp {siteSettings.cod_max_total.toLocaleString('id-ID')}.</>}
+                    </div>
+                  )}
+                  {siteSettings.cod_extra_note && (
+                    <div className="text-[11px] text-gray-400 mt-0.5 whitespace-pre-line">
+                      {siteSettings.cod_extra_note}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-xs text-gray-500">Belum tersedia.</div>
+              )}
+            </div>
+          </label>
         </div>
 
-        <button onClick={onSubmit} disabled={submitting || !chosenCost} className="btn-primary w-full mt-2">
+        {/* COD breakdown saat dipilih supaya total transparan. */}
+        {paymentMethod === 'cod' && siteSettings.cod_extra_fee > 0 && (
+          <div className="text-xs text-gray-600 flex justify-between bg-amber-50 border border-amber-200 rounded p-2 mt-1">
+            <span>Biaya layanan COD</span>
+            <span className="font-semibold">{formatRupiah(siteSettings.cod_extra_fee)}</span>
+          </div>
+        )}
+        {codViolation && (
+          <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2 mt-1">
+            {codViolation}
+          </div>
+        )}
+
+        <button onClick={onSubmit} disabled={submitting || !chosenCost || !!codViolation} className="btn-primary w-full mt-2">
           {submitting
             ? 'Memproses...'
             : paymentMethod === 'manual_transfer'
               ? 'Buat Pesanan & Lihat Rekening'
-              : 'Bayar Sekarang'}
+              : paymentMethod === 'cod'
+                ? 'Buat Pesanan COD'
+                : 'Bayar Sekarang'}
         </button>
         <div className="text-[11px] text-gray-500 text-center pt-1">
           {paymentMethod === 'manual_transfer'
             ? 'Setelah pesanan dibuat, transfer ke rekening lalu unggah bukti dari halaman pesanan.'
-            : 'Pembayaran via Midtrans: BCA / BNI / BRI / Mandiri / Permata VA, GoPay, ShopeePay, OVO, DANA, QRIS, Indomaret/Alfamart, kartu kredit.'}
+            : paymentMethod === 'cod'
+              ? 'Setelah pesanan dibuat, kami akan memproses pengiriman. Bayar tunai saat barang sampai.'
+              : 'Pembayaran via Midtrans: BCA / BNI / BRI / Mandiri / Permata VA, GoPay, ShopeePay, OVO, DANA, QRIS, Indomaret/Alfamart, kartu kredit.'}
         </div>
       </div>
     </div>

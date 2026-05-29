@@ -19,6 +19,7 @@ class Product extends Model
         'price',
         'operational_cost',
         'stock',
+        'low_stock_threshold',
         'weight',
         'images',
         'is_active',
@@ -35,12 +36,13 @@ class Product extends Model
     protected function casts(): array
     {
         return [
-            'images'           => 'array',
-            'price'            => 'integer',
-            'operational_cost' => 'integer',
-            'stock'            => 'integer',
-            'weight'           => 'integer',
-            'is_active'        => 'boolean',
+            'images'              => 'array',
+            'price'               => 'integer',
+            'operational_cost'    => 'integer',
+            'stock'               => 'integer',
+            'low_stock_threshold' => 'integer',
+            'weight'              => 'integer',
+            'is_active'           => 'boolean',
         ];
     }
 
