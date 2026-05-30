@@ -460,10 +460,10 @@ function CheckoutPageInner() {
     if (viewWeight <= 0) return;
 
     const weight = Math.max(1, viewWeight);
-    // Cache key di-prefix `v3` agar invalid begitu kecamatan ikut jadi
-    // faktor harga (sebelumnya v2 cuma kota+kurir+berat, jadi entry cache
-    // lama akan terus tampil tanpa pengaruh kecamatan sampai TTL habis).
-    const cacheKey = `ranco.v3.cost.${cityId}.${subdistrictId || '-'}.${courier}.${weight}`;
+    // Cache key di-prefix `v4` agar invalid begitu pengaruh kecamatan ke
+    // tarif diperbesar (sebelumnya v3 pakai range 0..2000; v4 pakai
+    // 0..6000 supaya perubahan kecamatan benar-benar terasa).
+    const cacheKey = `ranco.v4.cost.${cityId}.${subdistrictId || '-'}.${courier}.${weight}`;
     const cached = cacheGet<Cost[]>(cacheKey, 30 * 60 * 1000);
     if (cached && cached.length > 0) {
       setCosts(cached);
@@ -763,6 +763,60 @@ function CheckoutPageInner() {
                     {selectedAddr.city}, {selectedAddr.province}
                     {selectedAddr.postal_code ? ` ${selectedAddr.postal_code}` : ''}
                   </div>
+                  {/* Inline kecamatan picker — biar user bisa refine kecamatan
+                      tanpa harus masuk mode "Ubah" alamat. Pilihan otomatis
+                      memicu re-hitung ongkir + di-persist balik ke alamat
+                      tersimpan supaya kunjungan checkout berikutnya langsung
+                      pakai kecamatan terbaru. Hanya muncul kalau kota tujuan
+                      memang punya data kecamatan curated. */}
+                  {cityId && subdistricts.length > 0 && (
+                    <div className="mt-2">
+                      <label className="text-[11px] text-gray-500 block mb-0.5">
+                        Kecamatan (untuk ongkir lebih akurat)
+                      </label>
+                      <select
+                        className="input text-sm py-1"
+                        value={subdistrictId}
+                        onChange={(e) => {
+                          const newId = e.target.value;
+                          setSubdistrictId(newId);
+                          // Persist balik ke alamat tersimpan supaya pilihan
+                          // tidak hilang setelah checkout selesai. Tidak
+                          // memblokir UI — kalau gagal, biarkan saja.
+                          if (typeof selectedAddrId === 'number') {
+                            const sub = subdistricts.find((s) => s.subdistrict_id === newId);
+                            api.patch(`/addresses/${selectedAddrId}`, {
+                              subdistrict: sub?.subdistrict_name ?? null,
+                              subdistrict_id: sub?.subdistrict_id ?? null,
+                            })
+                              .then(() => {
+                                setAddresses((prev) => {
+                                  const next = prev.map((a) =>
+                                    a.id === selectedAddrId
+                                      ? {
+                                          ...a,
+                                          subdistrict: sub?.subdistrict_name ?? null,
+                                          subdistrict_id: sub?.subdistrict_id ?? null,
+                                        }
+                                      : a,
+                                  );
+                                  if (user) cacheSet(`ranco.addresses.${user.id}`, next);
+                                  return next;
+                                });
+                              })
+                              .catch(() => { /* opsional */ });
+                          }
+                        }}
+                      >
+                        <option value="">-- pilih kecamatan --</option>
+                        {subdistricts.map((s) => (
+                          <option key={s.subdistrict_id} value={s.subdistrict_id}>
+                            {s.subdistrict_name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                   {/* Surface a clear hint if we couldn't auto-resolve the city to
                       a RajaOngkir id — e.g. when the saved city name doesn't
                       match any city we know about. Without this, "Cek Ongkir"
