@@ -141,7 +141,12 @@ function CheckoutPageInner() {
     // Provinsi: pakai cache localStorage dulu supaya UI tidak nge-blank tunggu
     // network. Kalau cache ada, langsung pakai; di latar belakang tetap
     // refresh dari server supaya data nggak basi.
-    const cached = cacheGet<Province[]>('ranco.provinces');
+    //
+    // Cache key di-prefix `v2` karena dataset provinsi/kota di backend telah
+    // dirombak (resolve duplicate IDs, tambah Kabupaten lengkap). Tanpa
+    // bump prefix, browser yang sudah punya cache lama akan terus pakai
+    // ID lama dan dropdown Kota gagal di-load (province_id mismatch).
+    const cached = cacheGet<Province[]>('ranco.v2.provinces');
     if (cached && cached.length > 0) {
       setProvinces(cached);
       setProvincesLoading(false);
@@ -152,7 +157,7 @@ function CheckoutPageInner() {
       .then((r) => {
         const list = (r.data.data ?? []) as Province[];
         setProvinces(list);
-        cacheSet('ranco.provinces', list);
+        cacheSet('ranco.v2.provinces', list);
       })
       .catch((e) => {
         if (!cached) toast.error('Gagal memuat daftar provinsi: ' + apiError(e));
@@ -194,7 +199,7 @@ function CheckoutPageInner() {
   // Load cities whenever province changes (and reset downstream selections).
   useEffect(() => {
     if (provinceId) {
-      const cached = cacheGet<City[]>(`ranco.cities.${provinceId}`);
+      const cached = cacheGet<City[]>(`ranco.v2.cities.${provinceId}`);
       if (cached && cached.length > 0) {
         setCities(cached);
         setCitiesLoading(false);
@@ -205,7 +210,7 @@ function CheckoutPageInner() {
         .then((r) => {
           const list = (r.data.data ?? []) as City[];
           setCities(list);
-          cacheSet(`ranco.cities.${provinceId}`, list);
+          cacheSet(`ranco.v2.cities.${provinceId}`, list);
         })
         .catch((e) => {
           if (!cached) {
@@ -385,7 +390,10 @@ function CheckoutPageInner() {
     if (viewWeight <= 0) return;
 
     const weight = Math.max(1, viewWeight);
-    const cacheKey = `ranco.cost.${cityId}.${courier}.${weight}`;
+    // Cache key di-prefix `v2` agar invalid begitu logic ongkir di backend
+    // berubah jadi destination-aware (sebelumnya flat per kurir, jadi entry
+    // cache lama akan terus tampil flat sampai TTL 30 menit habis).
+    const cacheKey = `ranco.v2.cost.${cityId}.${courier}.${weight}`;
     const cached = cacheGet<Cost[]>(cacheKey, 30 * 60 * 1000);
     if (cached && cached.length > 0) {
       setCosts(cached);
@@ -822,6 +830,16 @@ function CheckoutPageInner() {
               <span className="ml-auto text-xs text-gray-500">Menghitung ongkir...</span>
             )}
           </div>
+          {/* Tampilkan berat total yang dipakai untuk hitung ongkir, supaya
+              user paham kenapa ongkir berubah sesuai produk yang dibeli.
+              RajaOngkir menghitung tarif per kelipatan kg (dibulatkan ke
+              atas), jadi 2500 gr akan ditagih sebagai 3 kg. */}
+          {viewWeight > 0 && (
+            <div className="text-xs text-gray-600 mb-2">
+              Berat total paket: <b>{viewWeight.toLocaleString('id-ID')} gr</b>
+              {' '}(dihitung sebagai <b>{Math.ceil(viewWeight / 1000)} kg</b>)
+            </div>
+          )}
           {!cityId && cekOngkirHint && (
             <div className="text-xs text-gray-500 mb-2">{cekOngkirHint}.</div>
           )}
