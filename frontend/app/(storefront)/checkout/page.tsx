@@ -103,6 +103,10 @@ function CheckoutPageInner() {
   const [provinceId, setProvinceId] = useState('');
   const [cityId, setCityId] = useState('');
   const [subdistrictId, setSubdistrictId] = useState('');
+  // Free-text fallback ketika kota terpilih tidak punya daftar kecamatan
+  // di mock dataset. Tidak punya subdistrict_id, jadi tidak ikut hitung
+  // ongkir tapi tetap di-persist untuk dicetak di label pengiriman.
+  const [manualSubdistrict, setManualSubdistrict] = useState('');
   const [postalCode, setPostalCode] = useState('');
   const [courier, setCourier] = useState<CourierCode>('jne');
   const [costs, setCosts] = useState<Cost[]>([]);
@@ -228,6 +232,7 @@ function CheckoutPageInner() {
     setCityId('');
     setSubdistrictId('');
     setSubdistricts([]);
+    setManualSubdistrict('');
     setCosts([]);
     setChosenCost(null);
   }, [provinceId]);
@@ -545,10 +550,13 @@ function CheckoutPageInner() {
     const cityObj = cities.find((c) => c.city_id === cityId);
     const provObj = provinces.find((p) => p.province_id === provinceId);
     const subdObj = subdistricts.find((s) => s.subdistrict_id === subdistrictId) ?? null;
+    // Resolve nama kecamatan terpilih: prioritas dari dropdown curated,
+    // fallback ke input manual untuk kota minor.
+    const kecamatanName = subdObj?.subdistrict_name ?? (manualSubdistrict.trim() || null);
     const pc = postalCode || cityObj?.postal_code || '';
     // Sertakan kecamatan di alamat cetak supaya kurir punya patokan
     // tambahan untuk drop-off (label tetap valid bahkan tanpa kecamatan).
-    const kecamatanLine = subdObj ? `Kec. ${subdObj.subdistrict_name}, ` : '';
+    const kecamatanLine = kecamatanName ? `Kec. ${kecamatanName}, ` : '';
     const addr = `${recipient.address}\n${kecamatanLine}${cityObj?.type ?? ''} ${cityObj?.city_name ?? ''}, ${provObj?.province ?? ''} ${pc}`.trim();
 
     setSubmitting(true);
@@ -571,7 +579,7 @@ function CheckoutPageInner() {
             province: provObj.province,
             city: `${cityObj.type} ${cityObj.city_name}`,
             city_id: cityObj.city_id,
-            subdistrict: subdObj?.subdistrict_name ?? null,
+            subdistrict: kecamatanName,
             subdistrict_id: subdObj?.subdistrict_id ?? null,
             postal_code: pc || cityObj.postal_code || '',
             is_default: addresses.length === 0,
@@ -879,11 +887,15 @@ function CheckoutPageInner() {
                     ))}
                   </select>
                 </div>
-                {/* Kecamatan picker hanya muncul kalau kota terpilih punya
-                    data kecamatan. Kalau tidak ada, kita silently fall
-                    back ke ongkir level kota — lebih bersih daripada
-                    menampilkan dropdown kosong yang membingungkan. */}
-                {cityId && subdistricts.length > 0 && (
+                {/* Kecamatan picker.
+                    - Kalau backend punya data curated → dropdown kecamatan.
+                    - Kalau tidak (kota minor / belum di-mock) → input teks
+                      bebas, supaya user tetap bisa tulis kecamatan untuk
+                      keperluan label kurir. Backend tetap menerima kolom
+                      `subdistrict` tanpa `subdistrict_id`; ongkir untuk
+                      kasus ini dihitung level kota (zone-based) tanpa
+                      adjustment per-kecamatan. */}
+                {cityId && subdistricts.length > 0 ? (
                   <div>
                     <label className="label">Kecamatan</label>
                     <select className="input" value={subdistrictId}
@@ -899,7 +911,22 @@ function CheckoutPageInner() {
                       Pilih kecamatan agar ongkir lebih akurat.
                     </p>
                   </div>
-                )}
+                ) : cityId ? (
+                  <div>
+                    <label className="label">Kecamatan</label>
+                    <input
+                      className="input"
+                      value={manualSubdistrict}
+                      onChange={(e) => setManualSubdistrict(e.target.value)}
+                      placeholder="Tulis nama kecamatan (mis. Sumber, Kedawung)"
+                      maxLength={120}
+                    />
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      Daftar kecamatan untuk kota ini belum tersedia — silakan ketik manual.
+                      Ongkir dihitung level kota.
+                    </p>
+                  </div>
+                ) : null}
                 <div><label className="label">Kode Pos</label>
                   <input className="input" value={postalCode}
                          onChange={(e) => setPostalCode(e.target.value)}
