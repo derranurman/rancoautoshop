@@ -109,5 +109,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/site-settings',          [SiteSettingsAdminController::class, 'show']);
         Route::put('/site-settings',          [SiteSettingsAdminController::class, 'update']);
         Route::post('/site-settings/upload',  [SiteSettingsAdminController::class, 'uploadAsset']);
+
+        // Komerce setup helper — admin searches for their store's
+        // destination_id (kelurahan-level) once during onboarding, pastes
+        // the numeric id into KOMERCE_ORIGIN_DESTINATION_ID. Not exposed
+        // publicly because it burns a Komerce quota call per search.
+        Route::get('/shipping/search-destination', [ShippingController::class, 'searchDestination']);
     });
 });

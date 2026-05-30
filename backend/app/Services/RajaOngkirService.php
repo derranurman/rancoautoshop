@@ -7,12 +7,27 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Thin wrapper for RajaOngkir (starter plan).
- * Docs: https://rajaongkir.com/dokumentasi
+ * Thin wrapper for RajaOngkir (starter plan) + the new Komerce
+ * Collaborator API which superseded it.
  *
- * When no API key is configured (or the live call fails), falls back to a
- * destination-aware mock so the dev UI still produces realistic, varied
- * shipping prices end-to-end.
+ * Docs:
+ *  - Legacy: https://rajaongkir.com/dokumentasi
+ *  - Komerce Collaborator: https://collaborator.komerce.id
+ *
+ * Resolution order for a cost lookup:
+ *   1. If Komerce is configured & enabled → delegate to KomerceShippingService
+ *      (real-time prices, counts against your Komerce quota).
+ *   2. Else if a legacy RajaOngkir api_key is set → call the legacy
+ *      api.rajaongkir.com/starter endpoint (still works for accounts
+ *      grandfathered before the Komerce migration).
+ *   3. Else → destination-aware mock so the dev UI still produces realistic,
+ *      varied shipping prices end-to-end without any external calls.
+ *
+ * Provinces / cities / subdistricts always come from the curated mock
+ * dataset — Indonesian admin geography is essentially static and the
+ * Komerce API has a different (flat) shape that doesn't map onto our
+ * cascading dropdowns. Keeping the dropdowns mock-backed avoids burning
+ * Komerce quota on data that never changes.
  *
  * Caching strategy:
  * - provinces: 24h (very static)
@@ -46,12 +61,14 @@ class RajaOngkirService
     protected string $baseUrl;
     protected ?string $apiKey;
     protected string $originCityId;
+    protected KomerceShippingService $komerce;
 
-    public function __construct()
+    public function __construct(KomerceShippingService $komerce)
     {
         $this->baseUrl      = (string) config('services.rajaongkir.base_url');
         $this->apiKey       = config('services.rajaongkir.api_key');
         $this->originCityId = (string) config('services.rajaongkir.origin_city_id');
+        $this->komerce      = $komerce;
     }
 
     public function enabled(): bool
@@ -121,6 +138,43 @@ class RajaOngkirService
         $courier = strtolower(trim($courier));
         $weight  = max(1, $weightGram);
 
+        // ============================================================
+        // Path 1: Komerce Collaborator API (preferred for go-live).
+        // ============================================================
+        // When Komerce is configured we go through the Komerce service for
+        // live pricing. We still cache the *result* at this layer (in
+        // addition to KomerceShippingService's own per-call cache) so that
+        // a checkout view re-rendered with no input changes never hits any
+        // service call at all — the cache versioning (`v4`) plus the
+        // explicit "komerce" namespace prevents this entry from ever
+        // colliding with the legacy RajaOngkir cache key below.
+        if ($this->komerce->enabled()) {
+            $komerceCacheKey = sprintf(
+                'rajaongkir.%s.komerce.cost.%s.%s.%s.%d.%s',
+                self::CACHE_VER_COST,
+                $this->originCityId,
+                $destinationCityId,
+                $subdistrictId ?: '-',
+                $weight,
+                $courier
+            );
+
+            return Cache::remember($komerceCacheKey, now()->addHours(6), function () use ($destinationCityId, $weight, $courier, $subdistrictId) {
+                $rows = $this->costViaKomerce($destinationCityId, $weight, $courier, $subdistrictId);
+                // Empty result means upstream couldn't quote (destination
+                // not resolvable, courier not served at that lane, quota
+                // exhausted, network error, ...). Fall back to the mock so
+                // the customer still sees an option rather than a blank
+                // courier list — the service has already logged the cause.
+                return ! empty($rows)
+                    ? $rows
+                    : $this->mockCost($courier, $weight, $destinationCityId, $subdistrictId);
+            });
+        }
+
+        // ============================================================
+        // Path 2: Legacy RajaOngkir starter API.
+        // ============================================================
         // Short-circuit: starter plan does not support J&T (jnt), so calling
         // RajaOngkir always wastes a full round-trip before failing. Just
         // serve the mock immediately for a snappy UI.
@@ -222,6 +276,98 @@ class RajaOngkirService
                 return $this->mockSubdistricts($cityId);
             }
         });
+    }
+
+    // --------------------- komerce delegation helpers ---------------------
+
+    /**
+     * Resolve our mock city_id (+ optional subdistrict_id) into a Komerce
+     * destination_id, then ask Komerce to calculate the cost for that
+     * origin/destination pair. Returns [] on any failure so the caller can
+     * fall back to the mock pricing.
+     *
+     * The flow lives here (not in KomerceShippingService) because only
+     * RajaOngkirService knows the mock dataset that the frontend dropdown
+     * IDs come from. KomerceShippingService just deals in name+postal
+     * tuples that any layer can supply.
+     */
+    protected function costViaKomerce(string $destinationCityId, int $weightGram, string $courier, ?string $subdistrictId): array
+    {
+        $cityRow = $this->findMockCityById($destinationCityId);
+        if ($cityRow === null) {
+            // Address points at a city_id we don't know about (could be a
+            // legacy id from before the dataset was rebuilt). Bail and let
+            // the caller fall back to mock pricing.
+            Log::warning('[komerce-bridge] city_id not found in mock dataset', [
+                'city_id' => $destinationCityId,
+            ]);
+            return [];
+        }
+
+        $cityName        = (string) ($cityRow['city_name'] ?? '');
+        $postalCode      = (string) ($cityRow['postal_code'] ?? '');
+        $subdistrictName = $subdistrictId
+            ? $this->findMockSubdistrictName($destinationCityId, $subdistrictId)
+            : null;
+
+        $destinationKomerceId = $this->komerce->resolveDestinationId(
+            $cityName,
+            $subdistrictName,
+            $postalCode !== '' ? $postalCode : null,
+        );
+        if ($destinationKomerceId === null) {
+            return [];
+        }
+
+        $originKomerceId = $this->komerce->originDestinationId();
+        if ($originKomerceId === null) {
+            // enabled() already guarded against this; defensive double-check.
+            return [];
+        }
+
+        return $this->komerce->calculateCost(
+            $originKomerceId,
+            $destinationKomerceId,
+            $weightGram,
+            $courier,
+        );
+    }
+
+    /**
+     * Look up a city row from the mock dataset by city_id. Returns null
+     * if the id isn't in the curated list. The mock dataset is the source
+     * of truth for the dropdowns the customer sees, so any id the frontend
+     * sends back here should be findable — anything else means stale
+     * client cache or a manually crafted request.
+     */
+    protected function findMockCityById(string $cityId): ?array
+    {
+        if ($cityId === '') {
+            return null;
+        }
+        // mockCities(null) returns the flattened list across all provinces.
+        foreach ($this->mockCities(null) as $row) {
+            if ((string) ($row['city_id'] ?? '') === $cityId) {
+                return $row;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Look up a subdistrict's display name from the mock dataset.
+     * Returns null when the id isn't found — caller falls back to
+     * city-level resolution, which Komerce still handles fine.
+     */
+    protected function findMockSubdistrictName(string $cityId, string $subdistrictId): ?string
+    {
+        foreach ($this->mockSubdistricts($cityId) as $row) {
+            if ((string) ($row['subdistrict_id'] ?? '') === $subdistrictId) {
+                $name = trim((string) ($row['subdistrict_name'] ?? ''));
+                return $name !== '' ? $name : null;
+            }
+        }
+        return null;
     }
 
     // --------------------- mocks ---------------------

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\KomerceShippingService;
 use App\Services\RajaOngkirService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -72,6 +73,43 @@ class ShippingController extends Controller
             );
         } catch (\Throwable $e) {
             Log::warning('[shipping] cost controller error: '.$e->getMessage());
+            $rows = [];
+        }
+
+        return response()->json(['data' => $rows]);
+    }
+
+    /**
+     * GET /admin/shipping/search-destination?q=<query>&limit=<n>
+     *
+     * Admin-only helper used during initial Komerce onboarding to discover
+     * the numeric destination_id that should be pasted into the
+     * `KOMERCE_ORIGIN_DESTINATION_ID` env var. Hits Komerce's destination
+     * search endpoint and returns the raw rows. Each call burns one quota
+     * hit, so we cap `limit` and intentionally don't expose this to the
+     * storefront — checkout uses the curated mock dropdowns instead.
+     *
+     * Returns 503 when Komerce isn't configured rather than silently
+     * returning [] so misconfiguration is obvious to the operator.
+     */
+    public function searchDestination(Request $request, KomerceShippingService $komerce): JsonResponse
+    {
+        $data = $request->validate([
+            'q'     => ['required', 'string', 'min:2', 'max:80'],
+            'limit' => ['nullable', 'integer', 'min:1', 'max:50'],
+        ]);
+
+        if (empty(config('services.komerce.api_key'))) {
+            return response()->json([
+                'message' => 'Komerce API key is not configured. Set KOMERCE_API_KEY in your .env first.',
+                'data'    => [],
+            ], 503);
+        }
+
+        try {
+            $rows = $komerce->searchDestination($data['q'], (int) ($data['limit'] ?? 10));
+        } catch (\Throwable $e) {
+            Log::warning('[shipping] search-destination controller error: '.$e->getMessage());
             $rows = [];
         }
 
