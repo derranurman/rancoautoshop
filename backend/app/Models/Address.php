@@ -17,7 +17,9 @@ class Address extends Model
         'phone',
         'province',
         'city',
-        'city_id',      // RajaOngkir city id
+        'city_id',         // RajaOngkir city id
+        'subdistrict',     // Free-form kecamatan name (label dipakai di alamat cetak).
+        'subdistrict_id',  // RajaOngkir subdistrict id (opsional — null kalau kota itu belum punya data kecamatan).
         'postal_code',
         'address_line',
         'is_default',

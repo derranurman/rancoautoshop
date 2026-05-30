@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { api, apiError } from '@/lib/api';
-import type { Address } from '@/lib/types';
+import type { Address, Subdistrict } from '@/lib/types';
 
 type Province = { province_id: string; province: string };
 type City = {
@@ -26,8 +26,11 @@ interface Props {
  * Reusable form for creating or editing a customer address.
  * - Loads provinces from RajaOngkir API on mount.
  * - Loads cities when province changes.
- * - When editing, tries to preselect the matching province/city by name and
- *   falls back to free-text values returned from the server.
+ * - Loads subdistricts (kecamatan) when city changes — kecamatan picker
+ *   is hidden when the chosen city has no kecamatan data, in which case
+ *   ongkir falls back to city level (still correct, just less granular).
+ * - When editing, tries to preselect the matching province / city /
+ *   kecamatan by id first, then by name.
  */
 export function AddressForm({ initial, onSaved, onCancel }: Props) {
   const [label, setLabel] = useState(initial?.label ?? '');
@@ -39,8 +42,10 @@ export function AddressForm({ initial, onSaved, onCancel }: Props) {
 
   const [provinces, setProvinces] = useState<Province[]>([]);
   const [cities, setCities] = useState<City[]>([]);
+  const [subdistricts, setSubdistricts] = useState<Subdistrict[]>([]);
   const [provinceId, setProvinceId] = useState('');
   const [cityId, setCityId] = useState(initial?.city_id ?? '');
+  const [subdistrictId, setSubdistrictId] = useState(initial?.subdistrict_id ?? '');
   const [busy, setBusy] = useState(false);
 
   // Load provinces once.
@@ -85,10 +90,53 @@ export function AddressForm({ initial, onSaved, onCancel }: Props) {
     if (match) setCityId(match.city_id);
   }, [cities, initial]);
 
+  // Load subdistricts (kecamatan) whenever the selected city changes.
+  // Empty response means "kecamatan data not available for this city" —
+  // we keep the dropdown hidden and silently fall back to city-level
+  // ongkir, which is still correct just less granular.
+  useEffect(() => {
+    if (!cityId) {
+      setSubdistricts([]);
+      setSubdistrictId('');
+      return;
+    }
+    let cancelled = false;
+    api.get('/shipping/subdistricts', { params: { city_id: cityId } })
+      .then((r) => {
+        if (cancelled) return;
+        const list = (r.data.data ?? []) as Subdistrict[];
+        setSubdistricts(list);
+        // Preserve a previously-saved kecamatan when editing, but only if
+        // the new city actually contains it (otherwise the value would be
+        // silently wrong — e.g. user changed city after saving).
+        if (initial?.subdistrict_id
+            && list.some((s) => s.subdistrict_id === initial.subdistrict_id)) {
+          setSubdistrictId(initial.subdistrict_id);
+        } else if (initial?.subdistrict) {
+          const byName = list.find(
+            (s) => s.subdistrict_name.toLowerCase() === (initial.subdistrict ?? '').toLowerCase(),
+          );
+          if (byName) setSubdistrictId(byName.subdistrict_id);
+        } else {
+          setSubdistrictId('');
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSubdistricts([]);
+        setSubdistrictId('');
+      });
+    return () => { cancelled = true; };
+  }, [cityId, initial?.subdistrict_id, initial?.subdistrict]);
+
   // Auto-fill postal code from selected city if user hasn't entered one.
   const selectedCity = useMemo(
     () => cities.find((c) => c.city_id === cityId) ?? null,
     [cities, cityId],
+  );
+  const selectedSubdistrict = useMemo(
+    () => subdistricts.find((s) => s.subdistrict_id === subdistrictId) ?? null,
+    [subdistricts, subdistrictId],
   );
   useEffect(() => {
     if (selectedCity && !postalCode) setPostalCode(selectedCity.postal_code);
@@ -114,6 +162,10 @@ export function AddressForm({ initial, onSaved, onCancel }: Props) {
       province: province.province,
       city: `${city.type} ${city.city_name}`.trim(),
       city_id: city.city_id,
+      // Only send kecamatan if the city actually has data and the user
+      // picked one. Empty string clears any previous value on the server.
+      subdistrict: selectedSubdistrict?.subdistrict_name ?? null,
+      subdistrict_id: selectedSubdistrict?.subdistrict_id ?? null,
       postal_code: postalCode || city.postal_code || null,
       address_line: addressLine.trim(),
       is_default: isDefault,
@@ -186,6 +238,7 @@ export function AddressForm({ initial, onSaved, onCancel }: Props) {
             onChange={(e) => {
               setProvinceId(e.target.value);
               setCityId('');
+              setSubdistrictId('');
             }}
             required
           >
@@ -202,7 +255,10 @@ export function AddressForm({ initial, onSaved, onCancel }: Props) {
           <select
             className="input"
             value={cityId}
-            onChange={(e) => setCityId(e.target.value)}
+            onChange={(e) => {
+              setCityId(e.target.value);
+              setSubdistrictId('');
+            }}
             disabled={!provinceId}
             required
           >
@@ -214,6 +270,31 @@ export function AddressForm({ initial, onSaved, onCancel }: Props) {
             ))}
           </select>
         </div>
+
+        {/* Kecamatan picker — only rendered when the chosen city actually
+            has kecamatan data. Otherwise we silently fall back to city-
+            level ongkir so the form doesn't show an empty/disabled
+            dropdown that just confuses the user. */}
+        {cityId && subdistricts.length > 0 && (
+          <div>
+            <label className="label">Kecamatan</label>
+            <select
+              className="input"
+              value={subdistrictId}
+              onChange={(e) => setSubdistrictId(e.target.value)}
+            >
+              <option value="">-- pilih kecamatan (opsional) --</option>
+              {subdistricts.map((s) => (
+                <option key={s.subdistrict_id} value={s.subdistrict_id}>
+                  {s.subdistrict_name}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-gray-500 mt-1">
+              Memilih kecamatan membuat ongkir lebih akurat.
+            </p>
+          </div>
+        )}
 
         <div>
           <label className="label">Kode Pos</label>

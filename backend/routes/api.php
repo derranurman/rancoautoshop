@@ -24,11 +24,13 @@ Route::get('/health', fn () => response()->json(['ok' => true, 'app' => config('
 
 Route::get('/categories',          [CategoryController::class, 'index']);
 Route::get('/products',            [ProductController::class, 'index']);
+Route::get('/products/suggest',    [ProductController::class, 'suggest']);
 Route::get('/products/{slug}',     [ProductController::class, 'show']);
 Route::post('/vouchers/check',     [VoucherController::class, 'check']);
-Route::get('/shipping/provinces',  [ShippingController::class, 'provinces']);
-Route::get('/shipping/cities',     [ShippingController::class, 'cities']);
-Route::post('/shipping/cost',      [ShippingController::class, 'cost']);
+Route::get('/shipping/provinces',     [ShippingController::class, 'provinces']);
+Route::get('/shipping/cities',        [ShippingController::class, 'cities']);
+Route::get('/shipping/subdistricts',  [ShippingController::class, 'subdistricts']);
+Route::post('/shipping/cost',         [ShippingController::class, 'cost']);
 
 // Public site settings (logo, hero, footer, WA widget) — dipakai storefront.
 Route::get('/site-settings',       [SiteSettingsController::class, 'show']);
@@ -82,6 +84,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::apiResource('categories',     CategoryAdminController::class)->except(['show']);
         Route::post('/products/upload-image', [ProductAdminController::class, 'uploadImage']);
         Route::post('/products/bulk-operational-cost', [ProductAdminController::class, 'bulkOperationalCost']);
+        // Bulk import (JSON array, di-parse di frontend dari Excel/CSV) & export.
+        Route::post('/products/bulk-import',  [ProductAdminController::class, 'bulkImport']);
+        Route::get('/products/export',        [ProductAdminController::class, 'bulkExport']);
         Route::apiResource('products',       ProductAdminController::class);
         Route::apiResource('vouchers',       VoucherAdminController::class)->except(['show']);
 

@@ -27,9 +27,10 @@ Route::get('/products',            [ProductController::class, 'index']);
 Route::get('/products/suggest',    [ProductController::class, 'suggest']);
 Route::get('/products/{slug}',     [ProductController::class, 'show']);
 Route::post('/vouchers/check',     [VoucherController::class, 'check']);
-Route::get('/shipping/provinces',  [ShippingController::class, 'provinces']);
-Route::get('/shipping/cities',     [ShippingController::class, 'cities']);
-Route::post('/shipping/cost',      [ShippingController::class, 'cost']);
+Route::get('/shipping/provinces',     [ShippingController::class, 'provinces']);
+Route::get('/shipping/cities',        [ShippingController::class, 'cities']);
+Route::get('/shipping/subdistricts',  [ShippingController::class, 'subdistricts']);
+Route::post('/shipping/cost',         [ShippingController::class, 'cost']);
 
 // Public site settings (logo, hero, footer, WA widget) — dipakai storefront.
 Route::get('/site-settings',       [SiteSettingsController::class, 'show']);

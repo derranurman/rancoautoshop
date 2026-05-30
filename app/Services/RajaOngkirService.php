@@ -38,9 +38,10 @@ class RajaOngkirService
      * Bump these when changing mock data / pricing logic so old Cache::remember
      * entries don't keep serving stale results to the UI.
      */
-    protected const CACHE_VER_PROVINCES = 'v2';
-    protected const CACHE_VER_CITIES    = 'v2';
-    protected const CACHE_VER_COST      = 'v2';
+    protected const CACHE_VER_PROVINCES    = 'v2';
+    protected const CACHE_VER_CITIES       = 'v2';
+    protected const CACHE_VER_SUBDISTRICTS = 'v1';
+    protected const CACHE_VER_COST         = 'v3';
 
     protected string $baseUrl;
     protected ?string $apiKey;
@@ -106,11 +107,16 @@ class RajaOngkirService
     /**
      * POST /cost
      *
-     * @param  string  $destinationCityId  RajaOngkir destination city id
-     * @param  int     $weightGram         total weight in grams
-     * @param  string  $courier            jne|pos|tiki (starter); jnt always mock
+     * @param  string       $destinationCityId  RajaOngkir destination city id
+     * @param  int          $weightGram         total weight in grams
+     * @param  string       $courier            jne|pos|tiki (starter); jnt always mock
+     * @param  string|null  $subdistrictId      RajaOngkir Pro subdistrict (kecamatan) id, optional —
+     *                                          when present, applies a small kecamatan-level
+     *                                          adjustment on top of the city-zone tariff so two
+     *                                          addresses in the same city but different kecamatan
+     *                                          don't render identical ongkir.
      */
-    public function cost(string $destinationCityId, int $weightGram, string $courier = 'jne'): array
+    public function cost(string $destinationCityId, int $weightGram, string $courier = 'jne', ?string $subdistrictId = null): array
     {
         $courier = strtolower(trim($courier));
         $weight  = max(1, $weightGram);
@@ -119,26 +125,35 @@ class RajaOngkirService
         // RajaOngkir always wastes a full round-trip before failing. Just
         // serve the mock immediately for a snappy UI.
         if (! $this->enabled() || ! in_array($courier, self::STARTER_COURIERS, true)) {
-            return $this->mockCost($courier, $weight, $destinationCityId);
+            return $this->mockCost($courier, $weight, $destinationCityId, $subdistrictId);
         }
 
         $cacheKey = sprintf(
-            'rajaongkir.%s.cost.%s.%s.%d.%s',
-            self::CACHE_VER_COST, $this->originCityId, $destinationCityId, $weight, $courier
+            'rajaongkir.%s.cost.%s.%s.%s.%d.%s',
+            self::CACHE_VER_COST,
+            $this->originCityId,
+            $destinationCityId,
+            $subdistrictId ?: '-',
+            $weight,
+            $courier
         );
 
-        return Cache::remember($cacheKey, now()->addHours(6), function () use ($destinationCityId, $weight, $courier) {
+        return Cache::remember($cacheKey, now()->addHours(6), function () use ($destinationCityId, $weight, $courier, $subdistrictId) {
             try {
                 $res = Http::connectTimeout(self::HTTP_CONNECT_TIMEOUT)
                     ->timeout(self::HTTP_TIMEOUT)
                     ->asForm()
                     ->withHeaders(['key' => $this->apiKey])
-                    ->post("{$this->baseUrl}/cost", [
+                    ->post("{$this->baseUrl}/cost", array_filter([
                         'origin'      => $this->originCityId,
                         'destination' => $destinationCityId,
+                        // Pro plan accepts originType/destinationType=subdistrict —
+                        // we don't enable that here because most installs are on
+                        // starter; subdistrict is only used to add granularity to
+                        // the local mock when it kicks in.
                         'weight'      => $weight,
                         'courier'     => $courier,
-                    ]);
+                    ]));
                 $results = $res->json('rajaongkir.results') ?? [];
                 // Flatten costs array for easier frontend consumption.
                 $flat = [];
@@ -153,10 +168,58 @@ class RajaOngkirService
                         ];
                     }
                 }
-                return ! empty($flat) ? $flat : $this->mockCost($courier, $weight, $destinationCityId);
+                return ! empty($flat) ? $flat : $this->mockCost($courier, $weight, $destinationCityId, $subdistrictId);
             } catch (\Throwable $e) {
                 Log::warning('[rajaongkir] cost failed: '.$e->getMessage());
-                return $this->mockCost($courier, $weight, $destinationCityId);
+                return $this->mockCost($courier, $weight, $destinationCityId, $subdistrictId);
+            }
+        });
+    }
+
+    /**
+     * GET /subdistrict?city=ID  (RajaOngkir Pro)
+     *
+     * Returns kecamatan-level rows for a given city. Most installs run on
+     * the starter plan (which does not expose this endpoint), so we serve
+     * a curated mock dataset for the major cities. Cities without mock
+     * data return an empty list — the frontend treats that as "kecamatan
+     * not available, fall back to city-level ongkir".
+     */
+    public function subdistricts(?string $cityId = null): array
+    {
+        if (! $cityId) {
+            return [];
+        }
+
+        // The Starter plan does not have /subdistrict. Trying to call it
+        // would 403 every single time, so we go straight to the mock.
+        // (When this codebase eventually upgrades to Pro, swap the guard
+        // for an explicit `services.rajaongkir.plan === 'pro'` check.)
+        if (! $this->enabled()) {
+            return $this->mockSubdistricts($cityId);
+        }
+
+        $cacheKey = 'rajaongkir.'.self::CACHE_VER_SUBDISTRICTS.'.subdistricts.'.$cityId;
+        return Cache::remember($cacheKey, now()->addHours(24), function () use ($cityId) {
+            try {
+                $res = Http::connectTimeout(self::HTTP_CONNECT_TIMEOUT)
+                    ->timeout(self::HTTP_TIMEOUT)
+                    ->withHeaders(['key' => $this->apiKey])
+                    ->get("{$this->baseUrl}/subdistrict", ['city' => $cityId]);
+                $rows = $res->json('rajaongkir.results') ?? [];
+                if (empty($rows)) {
+                    return $this->mockSubdistricts($cityId);
+                }
+                // Pro returns a denser shape; normalize down to the keys our
+                // frontend uses so swapping plans doesn't require any FE work.
+                return array_map(fn ($r) => [
+                    'subdistrict_id'   => (string) ($r['subdistrict_id'] ?? ''),
+                    'city_id'          => (string) ($r['city_id'] ?? $cityId),
+                    'subdistrict_name' => (string) ($r['subdistrict_name'] ?? ''),
+                ], $rows);
+            } catch (\Throwable $e) {
+                Log::warning('[rajaongkir] subdistricts failed: '.$e->getMessage());
+                return $this->mockSubdistricts($cityId);
             }
         });
     }
@@ -749,15 +812,18 @@ class RajaOngkirService
      * Mock cost — destination-aware. Uses a 5-zone model based on the
      * destination city's province (relative to Jakarta as origin), with a
      * deterministic per-city jitter so two different cities in the same zone
-     * still produce visibly different prices.
+     * still produce visibly different prices, plus an additional kecamatan
+     * adjustment so two addresses in the same city but different kecamatan
+     * see slightly different ongkir (mimicking RajaOngkir Pro behavior).
      *
      * Tariff is roughly:
      *   cost = ceil(weight/1000) * basePerKg(courier) * zoneMultiplier
      *        + (cityIdHash % 7) * 500
+     *        + (subdistrictIdHash % 5) * 500     // only when kecamatan provided
      *
      * Each call returns 3 service tiers (REG/YES/OKE) with sensible spreads.
      */
-    protected function mockCost(string $courier, int $weightGram, string $destinationCityId = ''): array
+    protected function mockCost(string $courier, int $weightGram, string $destinationCityId = '', ?string $subdistrictId = null): array
     {
         $courier = strtolower($courier);
         $weightKg = max(1, (int) ceil($weightGram / 1000));
@@ -778,7 +844,15 @@ class RajaOngkirService
         // Range: 0..3000 idr.
         $jitter = (abs(crc32($destinationCityId)) % 7) * 500;
 
-        $regBase = (int) round($weightKg * $basePerKg * $zoneMult) + $jitter;
+        // Kecamatan-level adjustment. Range 0..2000 idr. Only applied when
+        // the caller provided a subdistrict_id, otherwise we'd be inventing
+        // variation for cart sessions where the user hasn't picked a
+        // kecamatan yet.
+        $subAdj = $subdistrictId
+            ? (abs(crc32($subdistrictId)) % 5) * 500
+            : 0;
+
+        $regBase = (int) round($weightKg * $basePerKg * $zoneMult) + $jitter + $subAdj;
         // Floor so a 1kg local package never looks free.
         $regBase = max(8000, $regBase);
 
@@ -899,5 +973,125 @@ class RajaOngkirService
         }
         // REG
         return [1 => '1-2', 2 => '2-3', 3 => '3-5', 4 => '4-6', 5 => '6-9'][$zone] ?? '2-3';
+    }
+
+    /**
+     * Mock kecamatan (subdistrict) per city. Covers the cities most likely
+     * to receive orders (DKI Jakarta, the rest of Jabodetabek, Bandung,
+     * Yogyakarta, Surabaya, Medan, Makassar, Denpasar, Banda Aceh, ...).
+     *
+     * Cities not in this map return [] — the frontend handles that as
+     * "kecamatan tidak tersedia, ongkir level kota" and lets the user
+     * proceed without picking a kecamatan.
+     *
+     * Subdistrict IDs use synthetic 6-digit values (city_id * 1000 + n)
+     * so they're stable, globally unique, and obviously not real
+     * RajaOngkir Pro IDs (avoiding accidental collisions if/when this
+     * project upgrades to the Pro plan).
+     */
+    protected function mockSubdistricts(string $cityId): array
+    {
+        $namesByCity = [
+            // DKI Jakarta
+            '152' /* Jakarta Pusat */  => ['Tanah Abang', 'Menteng', 'Senen', 'Kemayoran', 'Gambir', 'Sawah Besar', 'Cempaka Putih', 'Johar Baru'],
+            '153' /* Jakarta Selatan */=> ['Kebayoran Baru', 'Kebayoran Lama', 'Tebet', 'Setiabudi', 'Mampang Prapatan', 'Pancoran', 'Pasar Minggu', 'Cilandak', 'Pesanggrahan', 'Jagakarsa'],
+            '154' /* Jakarta Timur */  => ['Matraman', 'Pulogadung', 'Jatinegara', 'Kramat Jati', 'Pasar Rebo', 'Cakung', 'Duren Sawit', 'Makasar', 'Ciracas', 'Cipayung'],
+            '151' /* Jakarta Utara */  => ['Penjaringan', 'Pademangan', 'Tanjung Priok', 'Koja', 'Kelapa Gading', 'Cilincing'],
+            '155' /* Jakarta Barat */  => ['Tambora', 'Taman Sari', 'Grogol Petamburan', 'Palmerah', 'Kebon Jeruk', 'Kembangan', 'Cengkareng', 'Kalideres'],
+            '150' /* Kep. Seribu */    => ['Kepulauan Seribu Utara', 'Kepulauan Seribu Selatan'],
+
+            // Banten — Tangerang area
+            '455' /* Kota Tangerang */         => ['Cipondoh', 'Karawaci', 'Cibodas', 'Pinang', 'Karang Tengah', 'Ciledug', 'Larangan', 'Tangerang', 'Periuk', 'Batu Ceper'],
+            '456' /* Tangerang Selatan */      => ['Serpong', 'Serpong Utara', 'Pondok Aren', 'Ciputat', 'Ciputat Timur', 'Pamulang', 'Setu'],
+            '91101' /* Kab. Tangerang */       => ['Kelapa Dua', 'Curug', 'Cikupa', 'Pasar Kemis', 'Sepatan', 'Mauk', 'Tigaraksa'],
+
+            // Jawa Barat — Bandung & Jabodetabek extension
+            '78'  /* Kota Bekasi */    => ['Bekasi Barat', 'Bekasi Timur', 'Bekasi Utara', 'Bekasi Selatan', 'Pondok Gede', 'Jatiasih', 'Pondok Melati', 'Bantargebang', 'Medan Satria', 'Mustika Jaya', 'Rawalumbu', 'Jatisampurna'],
+            '79'  /* Kab. Bekasi */    => ['Tambun Selatan', 'Tambun Utara', 'Cikarang Pusat', 'Cikarang Barat', 'Cikarang Utara', 'Cikarang Selatan', 'Cikarang Timur', 'Cibitung', 'Setu', 'Serang Baru'],
+            '80'  /* Kota Bogor */     => ['Bogor Tengah', 'Bogor Utara', 'Bogor Selatan', 'Bogor Barat', 'Bogor Timur', 'Tanah Sareal'],
+            '81'  /* Kab. Bogor */     => ['Cibinong', 'Gunung Putri', 'Gunung Sindur', 'Bojonggede', 'Citeureup', 'Sukaraja', 'Babakan Madang', 'Cileungsi', 'Cariu', 'Tanjungsari'],
+            '103' /* Kota Depok */     => ['Beji', 'Pancoran Mas', 'Sukmajaya', 'Cilodong', 'Cimanggis', 'Tapos', 'Sawangan', 'Bojongsari', 'Cinere', 'Limo', 'Cipayung'],
+            '22'  /* Kota Bandung */   => ['Sukajadi', 'Cidadap', 'Coblong', 'Bandung Wetan', 'Sumur Bandung', 'Andir', 'Cicendo', 'Bandung Kidul', 'Lengkong', 'Regol', 'Astana Anyar', 'Bojongloa Kaler', 'Antapani', 'Arcamanik', 'Cibeunying Kaler', 'Cibeunying Kidul', 'Mandalajati', 'Ujungberung', 'Cinambo', 'Panyileukan'],
+            '23'  /* Kab. Bandung */   => ['Soreang', 'Margahayu', 'Margaasih', 'Katapang', 'Dayeuhkolot', 'Bojongsoang', 'Banjaran', 'Cileunyi', 'Cimenyan', 'Cilengkrang', 'Rancaekek', 'Pameungpeuk'],
+            '115' /* Cimahi */         => ['Cimahi Utara', 'Cimahi Tengah', 'Cimahi Selatan'],
+
+            // Jawa Tengah / DIY
+            '399' /* Kota Semarang */  => ['Semarang Tengah', 'Semarang Utara', 'Semarang Timur', 'Semarang Selatan', 'Semarang Barat', 'Tugu', 'Genuk', 'Pedurungan', 'Banyumanik', 'Tembalang', 'Candisari', 'Gajahmungkur', 'Gunungpati', 'Mijen', 'Ngaliyan', 'Gayamsari'],
+            '457' /* Solo (Surakarta) */ => ['Laweyan', 'Serengan', 'Pasar Kliwon', 'Jebres', 'Banjarsari'],
+            '501' /* Yogyakarta */     => ['Mantrijeron', 'Kraton', 'Mergangsan', 'Umbulharjo', 'Kotagede', 'Gondokusuman', 'Danurejan', 'Pakualaman', 'Gondomanan', 'Ngampilan', 'Wirobrajan', 'Gedongtengen', 'Jetis', 'Tegalrejo'],
+            '91401' /* Sleman */       => ['Mlati', 'Depok', 'Berbah', 'Kalasan', 'Ngemplak', 'Gamping', 'Godean', 'Sleman', 'Pakem', 'Cangkringan'],
+            '39'    /* Bantul */       => ['Bantul', 'Kasihan', 'Sewon', 'Banguntapan', 'Pleret', 'Piyungan', 'Sedayu'],
+
+            // Jawa Timur
+            '444' /* Kota Surabaya */  => ['Tegalsari', 'Genteng', 'Bubutan', 'Simokerto', 'Pabean Cantian', 'Semampir', 'Krembangan', 'Kenjeran', 'Bulak', 'Tambaksari', 'Gubeng', 'Rungkut', 'Tenggilis Mejoyo', 'Gunung Anyar', 'Sukolilo', 'Mulyorejo', 'Sawahan', 'Wonokromo', 'Karangpilang', 'Dukuh Pakis', 'Wiyung', 'Gayungan', 'Wonocolo', 'Jambangan'],
+            '256' /* Kota Malang */    => ['Klojen', 'Blimbing', 'Kedungkandang', 'Sukun', 'Lowokwaru'],
+            '142' /* Gresik */         => ['Gresik', 'Kebomas', 'Manyar', 'Cerme', 'Driyorejo', 'Menganti', 'Wringinanom', 'Duduksampeyan'],
+            '409' /* Sidoarjo */       => ['Sidoarjo', 'Buduran', 'Candi', 'Waru', 'Taman', 'Krian', 'Gedangan', 'Sukodono', 'Tanggulangin', 'Porong'],
+
+            // Bali
+            '114' /* Denpasar */       => ['Denpasar Utara', 'Denpasar Timur', 'Denpasar Selatan', 'Denpasar Barat'],
+            '143' /* Gianyar */        => ['Gianyar', 'Ubud', 'Sukawati', 'Blahbatuh', 'Tampaksiring', 'Tegallalang', 'Payangan'],
+
+            // NOTE: city_id '17' is shared between Banda Aceh (Aceh) and
+            // Kabupaten Badung (Bali) in the legacy mock dataset. Resolving
+            // a kecamatan list keyed by city_id alone would silently leak
+            // Banda Aceh subdistricts to Bali users (or vice versa), which
+            // is worse than showing nothing — so for that one collision we
+            // intentionally omit kecamatan and let both cities fall back
+            // to city-level ongkir until the legacy ids get reissued.
+
+            // Sumatera Utara
+            '278' /* Medan */          => ['Medan Kota', 'Medan Baru', 'Medan Timur', 'Medan Tembung', 'Medan Petisah', 'Medan Helvetia', 'Medan Polonia', 'Medan Marelan', 'Medan Selayang', 'Medan Sunggal', 'Medan Tuntungan', 'Medan Johor', 'Medan Amplas', 'Medan Area', 'Medan Belawan', 'Medan Deli', 'Medan Denai', 'Medan Labuhan', 'Medan Maimun', 'Medan Perjuangan', 'Medan Barat'],
+
+            // Sumatera Selatan
+            '348' /* Palembang */      => ['Ilir Barat I', 'Ilir Barat II', 'Ilir Timur I', 'Ilir Timur II', 'Seberang Ulu I', 'Seberang Ulu II', 'Sukarami', 'Sako', 'Plaju', 'Kemuning', 'Kalidoni', 'Bukit Kecil', 'Gandus', 'Kertapati', 'Alang-Alang Lebar', 'Sematang Borang'],
+
+            // Sulawesi Selatan
+            '254' /* Makassar */       => ['Mariso', 'Mamajang', 'Tamalate', 'Rappocini', 'Makassar', 'Ujung Pandang', 'Wajo', 'Bontoala', 'Ujung Tanah', 'Tallo', 'Panakkukang', 'Manggala', 'Biringkanaya', 'Tamalanrea'],
+
+            // Riau
+            '350' /* Pekanbaru */      => ['Sukajadi', 'Pekanbaru Kota', 'Sail', 'Senapelan', 'Lima Puluh', 'Bukit Raya', 'Tampan', 'Marpoyan Damai', 'Tenayan Raya', 'Payung Sekaki', 'Rumbai', 'Rumbai Pesisir'],
+
+            // Kepulauan Riau
+            '48' /* Batam */           => ['Sekupang', 'Batu Aji', 'Sagulung', 'Lubuk Baja', 'Batam Kota', 'Bengkong', 'Batu Ampar', 'Nongsa', 'Sei Beduk', 'Bulang', 'Belakang Padang', 'Galang'],
+
+            // Jambi
+            '156' /* Jambi */          => ['Telanaipura', 'Jambi Selatan', 'Jambi Timur', 'Pasar Jambi', 'Pelayangan', 'Danau Teluk', 'Kota Baru', 'Jelutung'],
+
+            // Lampung
+            '21' /* Bandar Lampung */  => ['Tanjung Karang Pusat', 'Tanjung Karang Timur', 'Tanjung Karang Barat', 'Teluk Betung Utara', 'Teluk Betung Selatan', 'Teluk Betung Barat', 'Teluk Betung Timur', 'Panjang', 'Sukabumi', 'Sukarame', 'Kedaton', 'Rajabasa', 'Tanjung Senang', 'Way Halim', 'Langkapura', 'Enggal', 'Labuhan Ratu', 'Bumi Waras', 'Kemiling', 'Kedamaian'],
+
+            // Kalimantan Selatan
+            '13' /* Banjarmasin */     => ['Banjarmasin Tengah', 'Banjarmasin Utara', 'Banjarmasin Timur', 'Banjarmasin Selatan', 'Banjarmasin Barat'],
+
+            // Kalimantan Timur
+            '15' /* Balikpapan */      => ['Balikpapan Selatan', 'Balikpapan Tengah', 'Balikpapan Utara', 'Balikpapan Timur', 'Balikpapan Barat', 'Balikpapan Kota'],
+            '386' /* Samarinda */      => ['Samarinda Kota', 'Samarinda Ulu', 'Samarinda Ilir', 'Samarinda Utara', 'Samarinda Seberang', 'Sungai Kunjang', 'Sungai Pinang', 'Palaran', 'Loa Janan Ilir', 'Sambutan'],
+
+            // Sulawesi Utara
+            '263' /* Manado */         => ['Malalayang', 'Sario', 'Wanea', 'Wenang', 'Tikala', 'Mapanget', 'Singkil', 'Tuminting', 'Bunaken', 'Paal Dua', 'Bunaken Kepulauan'],
+
+            // Papua / Papua Barat
+            '161' /* Jayapura */       => ['Jayapura Utara', 'Jayapura Selatan', 'Heram', 'Abepura', 'Muara Tami'],
+            '93201' /* Sorong */       => ['Sorong', 'Sorong Barat', 'Sorong Timur', 'Sorong Utara', 'Sorong Kota', 'Sorong Manoi'],
+        ];
+
+        $list = $namesByCity[$cityId] ?? [];
+        if (empty($list)) {
+            return [];
+        }
+
+        $out = [];
+        // Synthetic id = "{cityId}-{1-based index}" so it's stable, unique
+        // per (city, kecamatan), and trivially traceable in logs.
+        foreach ($list as $i => $name) {
+            $idx = $i + 1;
+            $out[] = [
+                'subdistrict_id'   => $cityId.'-'.$idx,
+                'city_id'          => (string) $cityId,
+                'subdistrict_name' => $name,
+            ];
+        }
+        return $out;
     }
 }

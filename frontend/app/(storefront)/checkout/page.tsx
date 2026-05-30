@@ -13,6 +13,7 @@ import type { Address, PaymentMethod } from '@/lib/types';
 
 type Province = { province_id: string; province: string };
 type City = { city_id: string; province_id: string; type: string; city_name: string; postal_code: string };
+type Subdistrict = { subdistrict_id: string; city_id: string; subdistrict_name: string };
 type Cost = { courier: string; service: string; description: string; cost: number; etd: string };
 
 /**
@@ -96,10 +97,12 @@ function CheckoutPageInner() {
   const [recipient, setRecipient] = useState({ name: '', phone: '', address: '' });
   const [provinces, setProvinces] = useState<Province[]>([]);
   const [cities, setCities] = useState<City[]>([]);
+  const [subdistricts, setSubdistricts] = useState<Subdistrict[]>([]);
   const [provincesLoading, setProvincesLoading] = useState(true);
   const [citiesLoading, setCitiesLoading] = useState(false);
   const [provinceId, setProvinceId] = useState('');
   const [cityId, setCityId] = useState('');
+  const [subdistrictId, setSubdistrictId] = useState('');
   const [postalCode, setPostalCode] = useState('');
   const [courier, setCourier] = useState<CourierCode>('jne');
   const [costs, setCosts] = useState<Cost[]>([]);
@@ -223,6 +226,8 @@ function CheckoutPageInner() {
       setCities([]);
     }
     setCityId('');
+    setSubdistrictId('');
+    setSubdistricts([]);
     setCosts([]);
     setChosenCost(null);
   }, [provinceId]);
@@ -261,6 +266,15 @@ function CheckoutPageInner() {
     if (a.city_id) {
       setCityId(a.city_id);
     }
+    // Same fast-path for subdistrict — biar ongkir kecamatan-aware langsung
+    // ke-recompute tanpa nunggu /shipping/subdistricts selesai. Kalau city
+    // berubah jadi kota lain, subdistrict effect di bawah akan reset value
+    // ini begitu daftar baru tiba.
+    if (a.subdistrict_id) {
+      setSubdistrictId(a.subdistrict_id);
+    } else {
+      setSubdistrictId('');
+    }
 
     // Match province by name untuk kebutuhan dropdown UI (kalau user buka
     // mode "Ubah"). Pakai normalisasi case/whitespace/prefix supaya toleran
@@ -275,6 +289,8 @@ function CheckoutPageInner() {
       // cityId balik (lewat city_id kalau ada, atau lookup by nama kota).
       pendingCityIdRef.current = a.city_id ?? null;
       pendingCityNameRef.current = a.city ?? null;
+      pendingSubdistrictIdRef.current = a.subdistrict_id ?? null;
+      pendingSubdistrictNameRef.current = a.subdistrict ?? null;
     } else {
       // Province tidak ketemu — biarkan dropdown kosong, tapi cityId tetap
       // berfungsi kalau sudah di-set lewat fast-path di atas.
@@ -286,6 +302,10 @@ function CheckoutPageInner() {
   // asynchronously; we stash the desired city until the list arrives).
   const pendingCityIdRef = useRef<string | null>(null);
   const pendingCityNameRef = useRef<string | null>(null);
+  // Same idea for kecamatan — gets stashed by applyAddress and consumed
+  // when the subdistricts list for the resolved city arrives.
+  const pendingSubdistrictIdRef = useRef<string | null>(null);
+  const pendingSubdistrictNameRef = useRef<string | null>(null);
 
   // When cities arrive, try to resolve the pending city selection.
   useEffect(() => {
@@ -333,6 +353,51 @@ function CheckoutPageInner() {
     pendingCityIdRef.current = null;
     pendingCityNameRef.current = null;
   }, [cities]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load kecamatan whenever the selected city changes. Empty list means
+  // the city has no kecamatan data → UI hides the dropdown and ongkir
+  // falls back to city level. We also resolve any pending kecamatan
+  // selection coming from a saved address.
+  useEffect(() => {
+    if (!cityId) {
+      setSubdistricts([]);
+      // Don't clear subdistrictId here — applyAddress's fast-path may
+      // have set it for a not-yet-loaded city; the next cityId update
+      // will sort it out.
+      return;
+    }
+    let cancelled = false;
+    api.get('/shipping/subdistricts', { params: { city_id: cityId } })
+      .then((r) => {
+        if (cancelled) return;
+        const list = (r.data.data ?? []) as Subdistrict[];
+        setSubdistricts(list);
+
+        // Resolve any pending kecamatan selection from a saved address.
+        const wantId = pendingSubdistrictIdRef.current;
+        const wantName = pendingSubdistrictNameRef.current;
+        if (wantId && list.some((s) => s.subdistrict_id === wantId)) {
+          setSubdistrictId(wantId);
+        } else if (wantName) {
+          const m = list.find(
+            (s) => s.subdistrict_name.toLowerCase() === wantName.toLowerCase(),
+          );
+          if (m) setSubdistrictId(m.subdistrict_id);
+          else setSubdistrictId('');
+        } else if (subdistrictId && !list.some((s) => s.subdistrict_id === subdistrictId)) {
+          // Existing selection no longer valid for this city — clear it.
+          setSubdistrictId('');
+        }
+        pendingSubdistrictIdRef.current = null;
+        pendingSubdistrictNameRef.current = null;
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSubdistricts([]);
+        setSubdistrictId('');
+      });
+    return () => { cancelled = true; };
+  }, [cityId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function onAddressPick(value: string) {
     if (value === 'new') {
@@ -390,10 +455,10 @@ function CheckoutPageInner() {
     if (viewWeight <= 0) return;
 
     const weight = Math.max(1, viewWeight);
-    // Cache key di-prefix `v2` agar invalid begitu logic ongkir di backend
-    // berubah jadi destination-aware (sebelumnya flat per kurir, jadi entry
-    // cache lama akan terus tampil flat sampai TTL 30 menit habis).
-    const cacheKey = `ranco.v2.cost.${cityId}.${courier}.${weight}`;
+    // Cache key di-prefix `v3` agar invalid begitu kecamatan ikut jadi
+    // faktor harga (sebelumnya v2 cuma kota+kurir+berat, jadi entry cache
+    // lama akan terus tampil tanpa pengaruh kecamatan sampai TTL habis).
+    const cacheKey = `ranco.v3.cost.${cityId}.${subdistrictId || '-'}.${courier}.${weight}`;
     const cached = cacheGet<Cost[]>(cacheKey, 30 * 60 * 1000);
     if (cached && cached.length > 0) {
       setCosts(cached);
@@ -415,7 +480,12 @@ function CheckoutPageInner() {
       try {
         const r = await api.post(
           '/shipping/cost',
-          { destination: cityId, weight, courier },
+          {
+            destination: cityId,
+            subdistrict_id: subdistrictId || undefined,
+            weight,
+            courier,
+          },
           { signal: controller.signal },
         );
         const list = (r.data.data ?? []) as Cost[];
@@ -448,7 +518,7 @@ function CheckoutPageInner() {
       clearTimeout(timer);
       costAbortRef.current?.abort();
     };
-  }, [cityId, courier, viewWeight]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cityId, subdistrictId, courier, viewWeight]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function applyVoucher() {
     if (!voucherCode) { setDiscount(0); return; }
@@ -474,8 +544,12 @@ function CheckoutPageInner() {
     }
     const cityObj = cities.find((c) => c.city_id === cityId);
     const provObj = provinces.find((p) => p.province_id === provinceId);
+    const subdObj = subdistricts.find((s) => s.subdistrict_id === subdistrictId) ?? null;
     const pc = postalCode || cityObj?.postal_code || '';
-    const addr = `${recipient.address}\n${cityObj?.type ?? ''} ${cityObj?.city_name ?? ''}, ${provObj?.province ?? ''} ${pc}`.trim();
+    // Sertakan kecamatan di alamat cetak supaya kurir punya patokan
+    // tambahan untuk drop-off (label tetap valid bahkan tanpa kecamatan).
+    const kecamatanLine = subdObj ? `Kec. ${subdObj.subdistrict_name}, ` : '';
+    const addr = `${recipient.address}\n${kecamatanLine}${cityObj?.type ?? ''} ${cityObj?.city_name ?? ''}, ${provObj?.province ?? ''} ${pc}`.trim();
 
     setSubmitting(true);
     try {
@@ -497,6 +571,8 @@ function CheckoutPageInner() {
             province: provObj.province,
             city: `${cityObj.type} ${cityObj.city_name}`,
             city_id: cityObj.city_id,
+            subdistrict: subdObj?.subdistrict_name ?? null,
+            subdistrict_id: subdObj?.subdistrict_id ?? null,
             postal_code: pc || cityObj.postal_code || '',
             is_default: addresses.length === 0,
           });
@@ -675,6 +751,7 @@ function CheckoutPageInner() {
                     {selectedAddr.address_line}
                   </div>
                   <div className="mt-0.5 text-sm text-gray-500">
+                    {selectedAddr.subdistrict ? `Kec. ${selectedAddr.subdistrict}, ` : ''}
                     {selectedAddr.city}, {selectedAddr.province}
                     {selectedAddr.postal_code ? ` ${selectedAddr.postal_code}` : ''}
                   </div>
@@ -783,7 +860,10 @@ function CheckoutPageInner() {
                 </div>
                 <div><label className="label">Kota/Kabupaten</label>
                   <select className="input" value={cityId}
-                          onChange={(e) => setCityId(e.target.value)}
+                          onChange={(e) => {
+                            setCityId(e.target.value);
+                            setSubdistrictId('');
+                          }}
                           disabled={!provinceId || citiesLoading}>
                     <option value="">
                       {citiesLoading
@@ -799,6 +879,27 @@ function CheckoutPageInner() {
                     ))}
                   </select>
                 </div>
+                {/* Kecamatan picker hanya muncul kalau kota terpilih punya
+                    data kecamatan. Kalau tidak ada, kita silently fall
+                    back ke ongkir level kota — lebih bersih daripada
+                    menampilkan dropdown kosong yang membingungkan. */}
+                {cityId && subdistricts.length > 0 && (
+                  <div>
+                    <label className="label">Kecamatan</label>
+                    <select className="input" value={subdistrictId}
+                            onChange={(e) => setSubdistrictId(e.target.value)}>
+                      <option value="">-- pilih kecamatan (opsional) --</option>
+                      {subdistricts.map((s) => (
+                        <option key={s.subdistrict_id} value={s.subdistrict_id}>
+                          {s.subdistrict_name}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      Pilih kecamatan agar ongkir lebih akurat.
+                    </p>
+                  </div>
+                )}
                 <div><label className="label">Kode Pos</label>
                   <input className="input" value={postalCode}
                          onChange={(e) => setPostalCode(e.target.value)}

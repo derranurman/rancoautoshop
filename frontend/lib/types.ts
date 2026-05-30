@@ -30,11 +30,22 @@ export interface Address {
   province: string;
   city: string;
   city_id: string | null;
+  /** Free-form kecamatan name (label dipakai di alamat cetak). */
+  subdistrict: string | null;
+  /** RajaOngkir Pro subdistrict id, null kalau kota itu belum punya data kecamatan. */
+  subdistrict_id: string | null;
   postal_code: string | null;
   address_line: string;
   is_default: boolean;
   created_at?: string;
   updated_at?: string;
+}
+
+/** Kecamatan response dari GET /shipping/subdistricts?city_id=X. */
+export interface Subdistrict {
+  subdistrict_id: string;
+  city_id: string;
+  subdistrict_name: string;
 }
 
 export interface ProductVariant {
