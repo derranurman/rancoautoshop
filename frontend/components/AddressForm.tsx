@@ -26,9 +26,11 @@ interface Props {
  * Reusable form for creating or editing a customer address.
  * - Loads provinces from RajaOngkir API on mount.
  * - Loads cities when province changes.
- * - Loads subdistricts (kecamatan) when city changes — kecamatan picker
- *   is hidden when the chosen city has no kecamatan data, in which case
- *   ongkir falls back to city level (still correct, just less granular).
+ * - Loads subdistricts (kecamatan) when city changes:
+ *     • Kalau kota punya data curated → dropdown kecamatan.
+ *     • Kalau tidak ada → input teks bebas supaya alamat tetap bisa
+ *       disimpan dengan kecamatan untuk label kurir; ongkir jatuh ke
+ *       level kota.
  * - When editing, tries to preselect the matching province / city /
  *   kecamatan by id first, then by name.
  */
@@ -46,6 +48,13 @@ export function AddressForm({ initial, onSaved, onCancel }: Props) {
   const [provinceId, setProvinceId] = useState('');
   const [cityId, setCityId] = useState(initial?.city_id ?? '');
   const [subdistrictId, setSubdistrictId] = useState(initial?.subdistrict_id ?? '');
+  // Free-text fallback ketika kota terpilih tidak punya daftar kecamatan
+  // di mock dataset. Tetap di-persist sebagai `subdistrict` (tanpa
+  // subdistrict_id), sehingga muncul di label kurir; cuma tidak dipakai
+  // untuk hitung ongkir level kecamatan.
+  const [manualSubdistrict, setManualSubdistrict] = useState(
+    initial?.subdistrict_id ? '' : (initial?.subdistrict ?? ''),
+  );
   const [busy, setBusy] = useState(false);
 
   // Load provinces once.
@@ -92,8 +101,9 @@ export function AddressForm({ initial, onSaved, onCancel }: Props) {
 
   // Load subdistricts (kecamatan) whenever the selected city changes.
   // Empty response means "kecamatan data not available for this city" —
-  // we keep the dropdown hidden and silently fall back to city-level
-  // ongkir, which is still correct just less granular.
+  // we fall back to a free-text input (see render below) so user can still
+  // supply a kecamatan for the courier label, and city-level ongkir
+  // applies (still correct, just less granular).
   useEffect(() => {
     if (!cityId) {
       setSubdistricts([]);
@@ -112,11 +122,17 @@ export function AddressForm({ initial, onSaved, onCancel }: Props) {
         if (initial?.subdistrict_id
             && list.some((s) => s.subdistrict_id === initial.subdistrict_id)) {
           setSubdistrictId(initial.subdistrict_id);
-        } else if (initial?.subdistrict) {
+          setManualSubdistrict('');
+        } else if (initial?.subdistrict && list.length > 0) {
           const byName = list.find(
             (s) => s.subdistrict_name.toLowerCase() === (initial.subdistrict ?? '').toLowerCase(),
           );
-          if (byName) setSubdistrictId(byName.subdistrict_id);
+          if (byName) {
+            setSubdistrictId(byName.subdistrict_id);
+            setManualSubdistrict('');
+          } else {
+            setSubdistrictId('');
+          }
         } else {
           setSubdistrictId('');
         }
@@ -162,9 +178,11 @@ export function AddressForm({ initial, onSaved, onCancel }: Props) {
       province: province.province,
       city: `${city.type} ${city.city_name}`.trim(),
       city_id: city.city_id,
-      // Only send kecamatan if the city actually has data and the user
-      // picked one. Empty string clears any previous value on the server.
-      subdistrict: selectedSubdistrict?.subdistrict_name ?? null,
+      // Prioritas: dropdown kecamatan curated > input manual (kota tanpa
+      // data kecamatan). Empty string mengosongkan field di server.
+      subdistrict:
+        selectedSubdistrict?.subdistrict_name
+        ?? (manualSubdistrict.trim() || null),
       subdistrict_id: selectedSubdistrict?.subdistrict_id ?? null,
       postal_code: postalCode || city.postal_code || null,
       address_line: addressLine.trim(),
@@ -258,6 +276,7 @@ export function AddressForm({ initial, onSaved, onCancel }: Props) {
             onChange={(e) => {
               setCityId(e.target.value);
               setSubdistrictId('');
+              setManualSubdistrict('');
             }}
             disabled={!provinceId}
             required
@@ -271,11 +290,13 @@ export function AddressForm({ initial, onSaved, onCancel }: Props) {
           </select>
         </div>
 
-        {/* Kecamatan picker — only rendered when the chosen city actually
-            has kecamatan data. Otherwise we silently fall back to city-
-            level ongkir so the form doesn't show an empty/disabled
-            dropdown that just confuses the user. */}
-        {cityId && subdistricts.length > 0 && (
+        {/* Kecamatan picker.
+            - Kalau kota terpilih punya data curated → dropdown kecamatan.
+            - Kalau tidak (kota minor / belum di-mock) → input teks bebas
+              supaya alamat tetap bisa disimpan dengan kecamatan untuk
+              keperluan label kurir. Ongkir untuk kasus ini dihitung level
+              kota (zone-based) tanpa adjustment per-kecamatan. */}
+        {cityId && subdistricts.length > 0 ? (
           <div>
             <label className="label">Kecamatan</label>
             <select
@@ -294,7 +315,22 @@ export function AddressForm({ initial, onSaved, onCancel }: Props) {
               Memilih kecamatan membuat ongkir lebih akurat.
             </p>
           </div>
-        )}
+        ) : cityId ? (
+          <div>
+            <label className="label">Kecamatan</label>
+            <input
+              className="input"
+              value={manualSubdistrict}
+              onChange={(e) => setManualSubdistrict(e.target.value)}
+              placeholder="Tulis nama kecamatan (mis. Sumber, Kedawung)"
+              maxLength={120}
+            />
+            <p className="text-[11px] text-gray-500 mt-1">
+              Daftar kecamatan untuk kota ini belum tersedia — silakan ketik manual.
+              Ongkir dihitung level kota.
+            </p>
+          </div>
+        ) : null}
 
         <div>
           <label className="label">Kode Pos</label>

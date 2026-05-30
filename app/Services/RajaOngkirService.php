@@ -41,7 +41,7 @@ class RajaOngkirService
     protected const CACHE_VER_PROVINCES    = 'v2';
     protected const CACHE_VER_CITIES       = 'v2';
     protected const CACHE_VER_SUBDISTRICTS = 'v1';
-    protected const CACHE_VER_COST         = 'v3';
+    protected const CACHE_VER_COST         = 'v4';
 
     protected string $baseUrl;
     protected ?string $apiKey;
@@ -819,7 +819,7 @@ class RajaOngkirService
      * Tariff is roughly:
      *   cost = ceil(weight/1000) * basePerKg(courier) * zoneMultiplier
      *        + (cityIdHash % 7) * 500
-     *        + (subdistrictIdHash % 5) * 500     // only when kecamatan provided
+     *        + (subdistrictIdHash % 13) * 500    // only when kecamatan provided
      *
      * Each call returns 3 service tiers (REG/YES/OKE) with sensible spreads.
      */
@@ -844,12 +844,18 @@ class RajaOngkirService
         // Range: 0..3000 idr.
         $jitter = (abs(crc32($destinationCityId)) % 7) * 500;
 
-        // Kecamatan-level adjustment. Range 0..2000 idr. Only applied when
-        // the caller provided a subdistrict_id, otherwise we'd be inventing
-        // variation for cart sessions where the user hasn't picked a
-        // kecamatan yet.
+        // Kecamatan-level adjustment. Range 0..6000 idr (deterministic per
+        // subdistrict_id). Only applied when the caller provided a
+        // subdistrict_id, otherwise we'd be inventing variation for cart
+        // sessions where the user hasn't picked a kecamatan yet.
+        //
+        // The previous range (0..2000) was too subtle — most users couldn't
+        // tell whether their kecamatan choice actually affected ongkir.
+        // 0..6000 is still well below realistic intra-city tariff variance
+        // (RajaOngkir Pro can swing ~5–10k per kecamatan in practice) but
+        // visible enough to feel responsive in the UI.
         $subAdj = $subdistrictId
-            ? (abs(crc32($subdistrictId)) % 5) * 500
+            ? (abs(crc32($subdistrictId)) % 13) * 500
             : 0;
 
         $regBase = (int) round($weightKg * $basePerKg * $zoneMult) + $jitter + $subAdj;
