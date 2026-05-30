@@ -290,34 +290,38 @@ export function AddressForm({ initial, onSaved, onCancel }: Props) {
           </select>
         </div>
 
-        {/* Kecamatan picker.
-            - Kalau kota terpilih punya data curated → dropdown kecamatan.
-            - Kalau tidak (kota minor / belum di-mock) → input teks bebas
-              supaya alamat tetap bisa disimpan dengan kecamatan untuk
-              keperluan label kurir. Ongkir untuk kasus ini dihitung level
-              kota (zone-based) tanpa adjustment per-kecamatan. */}
-        {cityId && subdistricts.length > 0 ? (
-          <div>
-            <label className="label">Kecamatan</label>
+        {/* Kecamatan picker — selalu di-render full-width supaya posisi
+            field konsisten dan user pasti melihatnya begitu kota
+            terpilih. Tiga state: belum pilih kota / dropdown curated /
+            input teks bebas. Field tidak pernah disembunyikan total
+            supaya tidak terlewat oleh user. */}
+        <div className="sm:col-span-2">
+          <label className="label">
+            Kecamatan
+            {cityId && subdistricts.length > 0 && (
+              <span className="ml-2 text-[10px] uppercase tracking-wide bg-brand/10 text-brand px-1.5 py-0.5 rounded font-semibold">
+                disarankan
+              </span>
+            )}
+          </label>
+          {!cityId ? (
+            <select className="input" disabled>
+              <option>-- pilih kota dulu --</option>
+            </select>
+          ) : subdistricts.length > 0 ? (
             <select
               className="input"
               value={subdistrictId}
               onChange={(e) => setSubdistrictId(e.target.value)}
             >
-              <option value="">-- pilih kecamatan (opsional) --</option>
+              <option value="">-- pilih kecamatan --</option>
               {subdistricts.map((s) => (
                 <option key={s.subdistrict_id} value={s.subdistrict_id}>
                   {s.subdistrict_name}
                 </option>
               ))}
             </select>
-            <p className="text-[11px] text-gray-500 mt-1">
-              Memilih kecamatan membuat ongkir lebih akurat.
-            </p>
-          </div>
-        ) : cityId ? (
-          <div>
-            <label className="label">Kecamatan</label>
+          ) : (
             <input
               className="input"
               value={manualSubdistrict}
@@ -325,12 +329,15 @@ export function AddressForm({ initial, onSaved, onCancel }: Props) {
               placeholder="Tulis nama kecamatan (mis. Sumber, Kedawung)"
               maxLength={120}
             />
-            <p className="text-[11px] text-gray-500 mt-1">
-              Daftar kecamatan untuk kota ini belum tersedia — silakan ketik manual.
-              Ongkir dihitung level kota.
-            </p>
-          </div>
-        ) : null}
+          )}
+          <p className="text-[11px] text-gray-500 mt-1">
+            {!cityId
+              ? 'Pilih kota di atas dulu, lalu kecamatan akan muncul di sini.'
+              : subdistricts.length > 0
+                ? 'Memilih kecamatan membuat ongkir lebih akurat saat checkout.'
+                : 'Daftar kecamatan untuk kota ini belum tersedia — silakan ketik manual.'}
+          </p>
+        </div>
 
         <div>
           <label className="label">Kode Pos</label>

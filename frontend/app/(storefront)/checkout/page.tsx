@@ -941,33 +941,47 @@ function CheckoutPageInner() {
                     ))}
                   </select>
                 </div>
-                {/* Kecamatan picker.
-                    - Kalau backend punya data curated → dropdown kecamatan.
-                    - Kalau tidak (kota minor / belum di-mock) → input teks
-                      bebas, supaya user tetap bisa tulis kecamatan untuk
-                      keperluan label kurir. Backend tetap menerima kolom
-                      `subdistrict` tanpa `subdistrict_id`; ongkir untuk
-                      kasus ini dihitung level kota (zone-based) tanpa
-                      adjustment per-kecamatan. */}
-                {cityId && subdistricts.length > 0 ? (
-                  <div>
-                    <label className="label">Kecamatan</label>
-                    <select className="input" value={subdistrictId}
-                            onChange={(e) => setSubdistrictId(e.target.value)}>
-                      <option value="">-- pilih kecamatan (opsional) --</option>
+                {/* Kecamatan picker — selalu di-render full-width supaya
+                    posisi-nya konsisten dan user pasti melihatnya begitu
+                    kota terpilih. Tiga state:
+                      1) Belum pilih kota → placeholder kecil bilang
+                         "pilih kota dulu" (transparan, supaya layout
+                         stabil tanpa shift CLS).
+                      2) Kota terpilih + ada data kecamatan → dropdown
+                         kecamatan curated. Mempengaruhi ongkir.
+                      3) Kota terpilih tanpa data kecamatan → input teks
+                         bebas. Disimpan sebagai label kurir; ongkir
+                         tetap level kota.
+                    Field ini SELALU ada di DOM supaya kalau dropdown gagal
+                    muncul, user bisa scroll dan tahu apa yang missing,
+                    bukan diam-diam dihilangkan oleh conditional render. */}
+                <div className="sm:col-span-2">
+                  <label className="label">
+                    Kecamatan
+                    {cityId && subdistricts.length > 0 && (
+                      <span className="ml-2 text-[10px] uppercase tracking-wide bg-brand/10 text-brand px-1.5 py-0.5 rounded font-semibold">
+                        wajib untuk ongkir akurat
+                      </span>
+                    )}
+                  </label>
+                  {!cityId ? (
+                    <select className="input" disabled>
+                      <option>-- pilih kota dulu --</option>
+                    </select>
+                  ) : subdistricts.length > 0 ? (
+                    <select
+                      className="input"
+                      value={subdistrictId}
+                      onChange={(e) => setSubdistrictId(e.target.value)}
+                    >
+                      <option value="">-- pilih kecamatan --</option>
                       {subdistricts.map((s) => (
                         <option key={s.subdistrict_id} value={s.subdistrict_id}>
                           {s.subdistrict_name}
                         </option>
                       ))}
                     </select>
-                    <p className="text-[11px] text-gray-500 mt-1">
-                      Pilih kecamatan agar ongkir lebih akurat.
-                    </p>
-                  </div>
-                ) : cityId ? (
-                  <div>
-                    <label className="label">Kecamatan</label>
+                  ) : (
                     <input
                       className="input"
                       value={manualSubdistrict}
@@ -975,12 +989,15 @@ function CheckoutPageInner() {
                       placeholder="Tulis nama kecamatan (mis. Sumber, Kedawung)"
                       maxLength={120}
                     />
-                    <p className="text-[11px] text-gray-500 mt-1">
-                      Daftar kecamatan untuk kota ini belum tersedia — silakan ketik manual.
-                      Ongkir dihitung level kota.
-                    </p>
-                  </div>
-                ) : null}
+                  )}
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    {!cityId
+                      ? 'Pilih kota di atas dulu, lalu kecamatan akan muncul di sini.'
+                      : subdistricts.length > 0
+                        ? 'Pilih kecamatan agar ongkir lebih akurat. Ongkir akan otomatis dihitung ulang.'
+                        : 'Daftar kecamatan untuk kota ini belum tersedia — silakan ketik manual. Ongkir dihitung level kota.'}
+                  </p>
+                </div>
                 <div><label className="label">Kode Pos</label>
                   <input className="input" value={postalCode}
                          onChange={(e) => setPostalCode(e.target.value)}
